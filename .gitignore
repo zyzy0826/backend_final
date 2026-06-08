@@ -1,0 +1,20 @@
+# Binaries
+bin/
+*.exe
+
+# Environment
+.env
+
+# Keys (never commit private keys)
+keys/
+
+# Storage (runtime data)
+storage/
+
+# Go
+go.sum
+vendor/
+
+# IDE
+.vscode/
+.idea/
