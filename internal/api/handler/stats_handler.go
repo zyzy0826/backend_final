@@ -1,9 +1,6 @@
 package handler
 
 import (
-	"net/http"
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 	"regs/internal/repository"
 )
@@ -17,29 +14,9 @@ func NewStatsHandler(submissionRepo *repository.SubmissionRepository) *StatsHand
 }
 
 func (h *StatsHandler) ProblemStats(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("problem_id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid problem_id"})
-		return
-	}
-	stats, err := h.submissionRepo.GetProblemStats(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-	c.JSON(http.StatusOK, stats)
+	// TODO: implement — parse :problem_id, return ProblemStats as JSON
 }
 
 func (h *StatsHandler) UserStats(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("user_id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
-		return
-	}
-	stats, err := h.submissionRepo.GetUserStats(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-	c.JSON(http.StatusOK, stats)
+	// TODO: implement — parse :user_id, return UserStats as JSON
 }

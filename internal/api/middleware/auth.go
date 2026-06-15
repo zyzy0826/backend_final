@@ -2,9 +2,7 @@ package middleware
 
 import (
 	"crypto/ecdsa"
-	"net/http"
 	"os"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -35,45 +33,27 @@ func LoadPublicKey(cfg *config.Config) (*ecdsa.PublicKey, error) {
 	return jwt.ParseECPublicKeyFromPEM(data)
 }
 
-// Auth requires a valid JWT in the Authorization header.
+// Auth requires a valid JWT in the Authorization: Bearer <token> header.
 func Auth(publicKey *ecdsa.PublicKey) gin.HandlerFunc {
+	// TODO: implement — parse token, abort with 401 if invalid, set claims into context
 	return func(c *gin.Context) {
-		token, err := parseToken(c, publicKey)
-		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			c.Abort()
-			return
-		}
-		setClaims(c, token)
 		c.Next()
 	}
 }
 
-// OptionalAuth parses the JWT if present, but does not abort if missing.
+// OptionalAuth parses the JWT if present, but does not abort if missing or invalid.
 func OptionalAuth(publicKey *ecdsa.PublicKey) gin.HandlerFunc {
+	// TODO: implement — if token present and valid, set claims into context; always call Next()
 	return func(c *gin.Context) {
-		if token, err := parseToken(c, publicKey); err == nil && token.Valid {
-			setClaims(c, token)
-		}
 		c.Next()
 	}
 }
 
 func parseToken(c *gin.Context, publicKey *ecdsa.PublicKey) (*jwt.Token, error) {
-	header := c.GetHeader("Authorization")
-	if !strings.HasPrefix(header, "Bearer ") {
-		return nil, jwt.ErrTokenMalformed
-	}
-	tokenStr := strings.TrimPrefix(header, "Bearer ")
-	return jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		return publicKey, nil
-	}, jwt.WithValidMethods([]string{"ES256"}))
+	// TODO: implement — extract Bearer token from Authorization header, parse with ES256
+	return nil, nil
 }
 
 func setClaims(c *gin.Context, token *jwt.Token) {
-	if claims, ok := token.Claims.(*Claims); ok {
-		c.Set("user_id", claims.UserID)
-		c.Set("username", claims.Username)
-		c.Set("role", string(claims.Role))
-	}
+	// TODO: implement — set user_id, username, role into gin context
 }

@@ -1,8 +1,6 @@
 package queue
 
 import (
-	"context"
-
 	"regs/internal/judge"
 	"regs/internal/model"
 )
@@ -17,8 +15,8 @@ type Job struct {
 }
 
 type Queue struct {
-	jobs  chan Job
-	jdg   *judge.Judge
+	jobs chan Job
+	jdg  *judge.Judge
 }
 
 func New(maxConcurrent int, jdg *judge.Judge) *Queue {
@@ -34,21 +32,7 @@ func (q *Queue) Push(job Job) {
 	q.jobs <- job
 }
 
-// run dispatches jobs to goroutines, bounded by maxConcurrent (semaphore pattern).
+// run dispatches jobs to goroutines bounded by maxConcurrent (semaphore pattern).
 func (q *Queue) run(maxConcurrent int) {
-	sem := make(chan struct{}, maxConcurrent)
-	for job := range q.jobs {
-		sem <- struct{}{}
-		go func(j Job) {
-			defer func() { <-sem }()
-			q.jdg.RunJob(context.Background(), judge.JobInput{
-				SubmissionID: j.SubmissionID,
-				OperatorID:   j.OperatorID,
-				ProblemID:    j.ProblemID,
-				ZipPath:      j.ZipPath,
-				Testcases:    j.Testcases,
-				TimeLimit:    j.TimeLimit,
-			})
-		}(job)
-	}
+	// TODO: implement using a buffered channel as a semaphore
 }

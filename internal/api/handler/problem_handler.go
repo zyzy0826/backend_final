@@ -1,11 +1,7 @@
 package handler
 
 import (
-	"net/http"
-	"strconv"
-
 	"github.com/gin-gonic/gin"
-	"regs/internal/model"
 	"regs/internal/repository"
 )
 
@@ -18,85 +14,26 @@ func NewProblemHandler(problemRepo *repository.ProblemRepository) *ProblemHandle
 }
 
 func (h *ProblemHandler) List(c *gin.Context) {
-	problems, err := h.problemRepo.List(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-	c.JSON(http.StatusOK, problems)
+	// TODO: implement — return all problems as JSON
 }
 
 func (h *ProblemHandler) Get(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("problem_id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid problem_id"})
-		return
-	}
-	problem, err := h.problemRepo.FindByID(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "problem not found"})
-		return
-	}
-	c.JSON(http.StatusOK, problem)
+	// TODO: implement — parse :problem_id, return problem or 404
 }
 
 // Upsert handles PUT /api/problems — creates or updates a problem with its testcases.
 func (h *ProblemHandler) Upsert(c *gin.Context) {
-	var req struct {
-		ID          int               `json:"id"`
-		Title       string            `json:"title" binding:"required"`
-		Description string            `json:"description"`
-		TimeLimit   int               `json:"time_limit"`
-		Testcases   []model.Testcase  `json:"testcases"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if req.TimeLimit <= 0 {
-		req.TimeLimit = 5
-	}
-
-	problem := &model.Problem{
-		ID:          req.ID,
-		Title:       req.Title,
-		Description: req.Description,
-		TimeLimit:   req.TimeLimit,
-	}
-
-	result, err := h.problemRepo.Upsert(c.Request.Context(), problem, req.Testcases)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, result)
+	// TODO: implement
+	// 1. Bind JSON (id, title, description, time_limit, testcases)
+	// 2. Call problemRepo.Upsert
+	// 3. Return updated problem
 }
 
 func (h *ProblemHandler) Delete(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("problem_id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid problem_id"})
-		return
-	}
-	if err := h.problemRepo.Delete(c.Request.Context(), id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete failed"})
-		return
-	}
-	c.Status(http.StatusNoContent)
+	// TODO: implement — parse :problem_id, call problemRepo.Delete, return 204
 }
 
 // GetTestcases returns all testcases for a problem (Admin only).
 func (h *ProblemHandler) GetTestcases(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("problem_id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid problem_id"})
-		return
-	}
-	tcs, err := h.problemRepo.GetTestcases(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-	c.JSON(http.StatusOK, tcs)
+	// TODO: implement — parse :problem_id, return testcases as JSON
 }
