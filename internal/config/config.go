@@ -1,3 +1,5 @@
+/* 載入設定檔案 */
+
 package config
 
 import (

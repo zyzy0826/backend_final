@@ -1,11 +1,15 @@
+/* 拿到資料庫的網址 → 建立連線池 → ping 一下確認連得上 → 回傳連線物件。
+   之後所有 repository 都透過這個 pool 來跟資料庫溝通。 */
+
 package db
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"regs/internal/config"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func NewPool(cfg *config.Config) (*pgxpool.Pool, error) {

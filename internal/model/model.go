@@ -1,3 +1,5 @@
+/* 定義物件型別 */
+
 package model
 
 import "time"
@@ -64,7 +66,7 @@ type Submission struct {
 }
 
 type SubmissionDetail struct {
-	Submission
+	Submission          // 嵌入，類似於繼承的概念
 	ConfigureLog string `json:"configure_log,omitempty"`
 	CompileLog   string `json:"compile_log,omitempty"`
 	OutputLog    string `json:"output_log,omitempty"`
@@ -83,8 +85,8 @@ type ProblemStats struct {
 }
 
 type UserStats struct {
-	UserID    int `json:"user_id"`
-	Total     int `json:"total"`
-	AC        int `json:"ac"`
-	Solved    int `json:"solved"`
+	UserID int `json:"user_id"`
+	Total  int `json:"total"`
+	AC     int `json:"ac"`
+	Solved int `json:"solved"`
 }

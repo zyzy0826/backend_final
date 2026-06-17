@@ -16,16 +16,40 @@ func NewUserRepository(db *pgxpool.Pool) *UserRepository {
 }
 
 func (r *UserRepository) Create(ctx context.Context, username, passwordHash string) (*model.User, error) {
-	// TODO: implement
-	return nil, nil
+	const q = `
+		INSERT INTO users (username, password)
+		VALUES ($1, $2)
+		RETURNING id, username, password, role, created_at`
+
+	var u model.User
+	err := r.db.QueryRow(ctx, q, username, passwordHash).
+		Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 func (r *UserRepository) FindByID(ctx context.Context, id int) (*model.User, error) {
-	// TODO: implement
-	return nil, nil
+	const q = `SELECT id, username, password, role, created_at FROM users WHERE id = $1`
+
+	var u model.User
+	err := r.db.QueryRow(ctx, q, id).
+		Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 func (r *UserRepository) FindByUsername(ctx context.Context, username string) (*model.User, error) {
-	// TODO: implement
-	return nil, nil
+	const q = `SELECT id, username, password, role, created_at FROM users WHERE username = $1`
+
+	var u model.User
+	err := r.db.QueryRow(ctx, q, username).
+		Scan(&u.ID, &u.Username, &u.Password, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
