@@ -1,12 +1,15 @@
+/* 設定 API 路由 */
+
 package api
 
 import (
 	"crypto/ecdsa"
 
-	"github.com/gin-gonic/gin"
 	"regs/internal/api/handler"
 	"regs/internal/api/middleware"
 	"regs/internal/model"
+
+	"github.com/gin-gonic/gin"
 )
 
 func SetupRouter(
@@ -37,11 +40,11 @@ func SetupRouter(
 	// Problem routes
 	problems := api.Group("/problems")
 	{
-		problems.GET("", problemHandler.List)                                                         // Guest
-		problems.GET("/:problem_id", problemHandler.Get)                                             // Guest
-		problems.PUT("", auth, requireAdmin, problemHandler.Upsert)                                  // Admin
-		problems.DELETE("/:problem_id", auth, requireAdmin, problemHandler.Delete)                   // Admin
-		problems.GET("/:problem_id/testcases", auth, requireAdmin, problemHandler.GetTestcases)      // Admin
+		problems.GET("", problemHandler.List)                                                   // Guest
+		problems.GET("/:problem_id", problemHandler.Get)                                        // Guest
+		problems.PUT("", auth, requireAdmin, problemHandler.Upsert)                             // Admin
+		problems.DELETE("/:problem_id", auth, requireAdmin, problemHandler.Delete)              // Admin
+		problems.GET("/:problem_id/testcases", auth, requireAdmin, problemHandler.GetTestcases) // Admin
 	}
 
 	// Submission routes
