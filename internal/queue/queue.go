@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"context"
+
 	"regs/internal/judge"
 	"regs/internal/model"
 )
@@ -32,7 +34,27 @@ func (q *Queue) Push(job Job) {
 	q.jobs <- job
 }
 
-// run dispatches jobs to goroutines bounded by maxConcurrent (semaphore pattern).
+// run pulls jobs off the queue in FIFO order and dispatches each to its own
+// goroutine, using a buffered channel as a counting semaphore to cap the number
+// of judge containers running at once.
 func (q *Queue) run(maxConcurrent int) {
-	// TODO: implement using a buffered channel as a semaphore
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+	sem := make(chan struct{}, maxConcurrent)
+
+	for job := range q.jobs {
+		sem <- struct{}{} // blocks once maxConcurrent jobs are in flight
+		go func(job Job) {
+			defer func() { <-sem }()
+			q.jdg.RunJob(context.Background(), judge.JobInput{
+				SubmissionID: job.SubmissionID,
+				OperatorID:   job.OperatorID,
+				ProblemID:    job.ProblemID,
+				ZipPath:      job.ZipPath,
+				Testcases:    job.Testcases,
+				TimeLimit:    job.TimeLimit,
+			})
+		}(job)
+	}
 }
