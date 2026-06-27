@@ -1,0 +1,625 @@
+openapi: 3.0.3
+info:
+  title: REGS — Online Judge Backend API
+  description: |
+    CS3060701 期末專案。接收 C++ CMake 專案的 ZIP 壓縮檔，於隔離的 Docker 容器內
+    自動完成 configure / build / 執行 / 判題，並透過 REST API 對外提供查詢。
+
+    ## 權限模型 (RBAC)
+    權限大小：**Admin > User > Guest**
+    - `Guest`：無需 `Authorization` header
+    - `User` / `Admin`：需帶 `Authorization: Bearer <JWT>`（ES256 簽章）
+    - 標注為 Guest 的端點所有人皆可存取；標注 User 的 Admin 也可；標注 Admin 僅管理者。
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: 本機開發伺服器
+
+tags:
+  - name: UserInfo
+  - name: Problem
+  - name: Submission
+  - name: Statistics
+
+paths:
+  /api/users/register:
+    post:
+      tags: [UserInfo]
+      summary: 註冊新使用者帳號
+      description: 密碼以 bcrypt 雜湊後儲存。新帳號預設 role 為 `user`。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '201':
+          description: 建立成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: 使用者名稱已存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/users/login:
+    post:
+      tags: [UserInfo]
+      summary: 帳號密碼登入並簽署 JWT
+      description: 驗證成功回傳 24 小時效期的 ES256 JWT。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '200':
+          description: 登入成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT，放入後續請求的 Authorization header
+                    example: eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: 帳號或密碼錯誤
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/users/logout:
+    post:
+      tags: [UserInfo]
+      summary: 登出目前登入的使用者
+      description: JWT 為無狀態設計，伺服器不維護 session；客戶端自行丟棄 token 即可。
+      responses:
+        '200':
+          description: 已登出
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: logged out
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/users/me:
+    get:
+      tags: [UserInfo]
+      summary: 取得目前登入使用者的個人資料
+      responses:
+        '200':
+          description: 個人資料
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/users/{user_id}/submissions:
+    get:
+      tags: [UserInfo]
+      summary: 取得指定使用者的提交紀錄
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: 提交紀錄列表（依 created_at 由新到舊）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Submission'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/problems:
+    get:
+      tags: [Problem]
+      summary: 取得題目列表
+      security: []
+      responses:
+        '200':
+          description: 題目列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Problem'
+    put:
+      tags: [Problem]
+      summary: 建立或更新題目（含測資）
+      description: |
+        `id > 0` 時更新既有題目（若該 id 不存在則以此 id 建立）；`id` 省略或為 0 時建立新題目。
+        每次呼叫會以送入的 `testcases` **整批取代**該題所有測資（在單一交易內完成）。
+      responses:
+        '200':
+          description: 建立 / 更新後的題目
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProblemUpsert'
+
+  /api/problems/{problem_id}:
+    get:
+      tags: [Problem]
+      summary: 取得單一題目的完整描述
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProblemID'
+      responses:
+        '200':
+          description: 題目詳情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Problem]
+      summary: 刪除題目
+      description: 連帶刪除該題所有測資與（透過 FK cascade）相關資料。
+      parameters:
+        - $ref: '#/components/parameters/ProblemID'
+      responses:
+        '204':
+          description: 已刪除，無內容
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/problems/{problem_id}/testcases:
+    get:
+      tags: [Problem]
+      summary: 取得題目的所有測資（Admin）
+      parameters:
+        - $ref: '#/components/parameters/ProblemID'
+      responses:
+        '200':
+          description: 測資列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Testcase'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/submissions:
+    post:
+      tags: [Submission]
+      summary: 提交程式碼進行評測
+      description: |
+        以 `multipart/form-data` 上傳 `.zip` 專案檔。伺服器立即回傳 `operator_id`（HTTP 202），
+        評測於背景任務佇列非同步執行，不等待完成。之後可用 operator_id 查詢結果與日誌。
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, problem_id]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 專案壓縮檔（副檔名必須為 .zip，根目錄含 CMakeLists.txt）
+                problem_id:
+                  type: integer
+                  description: 目標題目 ID
+                  example: 1
+      responses:
+        '202':
+          description: 已受理，評測排入佇列
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  operator_id:
+                    type: string
+                    format: uuid
+                    example: 3f1c2b7e-9a4d-4e2b-8f0a-1c2d3e4f5a6b
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 題目不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags: [Submission]
+      summary: 查詢個人提交紀錄列表
+      responses:
+        '200':
+          description: 登入者自己的提交列表（依 created_at 由新到舊）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Submission'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/submissions/{operatorId}:
+    get:
+      tags: [Submission]
+      summary: 取得單一提交的評測結果與三段日誌
+      description: 僅提交者本人或 Admin 可存取。
+      parameters:
+        - $ref: '#/components/parameters/OperatorID'
+      responses:
+        '200':
+          description: 提交詳情（含 configure / compile / output 日誌）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/submissions/{operatorId}/source:
+    get:
+      tags: [Submission]
+      summary: 下載提交的原始專案 ZIP
+      description: 僅提交者本人或 Admin 可存取。回傳原始上傳的壓縮檔。
+      parameters:
+        - $ref: '#/components/parameters/OperatorID'
+      responses:
+        '200':
+          description: 原始 ZIP 檔
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/stats/problems/{problem_id}:
+    get:
+      tags: [Statistics]
+      summary: 取得題目統計資料
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProblemID'
+      responses:
+        '200':
+          description: 題目統計（各狀態計數）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemStats'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/stats/users/{user_id}:
+    get:
+      tags: [Statistics]
+      summary: 取得使用者統計資料
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: 使用者統計（總提交 / AC 數 / 解題數）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserStats'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: ES256 簽章的 JWT，登入端點取得
+
+  security:
+    - bearerAuth: []
+
+  parameters:
+    ProblemID:
+      name: problem_id
+      in: path
+      required: true
+      schema:
+        type: integer
+      example: 1
+    UserID:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: integer
+      example: 1
+    OperatorID:
+      name: operatorId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      example: 3f1c2b7e-9a4d-4e2b-8f0a-1c2d3e4f5a6b
+
+  responses:
+    BadRequest:
+      description: 請求參數錯誤
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: 未提供或無效的 JWT
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: 權限不足
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: 資源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: unauthorized
+
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: alice
+        password:
+          type: string
+          format: password
+          example: s3cret-pass
+
+    Role:
+      type: string
+      enum: [user, admin]
+
+    Status:
+      type: string
+      description: |
+        pending（排隊中）/ running（評測中）/ AC（通過）/ WA（答案錯誤）/
+        CE（編譯錯誤）/ SE（初始化/configure 錯誤）/ RE（執行期錯誤）/ TLE（逾時）
+      enum: [pending, running, AC, WA, CE, SE, RE, TLE]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: alice
+        role:
+          $ref: '#/components/schemas/Role'
+        created_at:
+          type: string
+          format: date-time
+      description: 回應中不含 password 欄位
+
+    Problem:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        title:
+          type: string
+          example: A + B Problem
+        description:
+          type: string
+          example: 讀入兩個整數，輸出其和。
+        time_limit:
+          type: integer
+          description: 每個測資的執行秒數上限
+          example: 5
+        created_at:
+          type: string
+          format: date-time
+
+    Testcase:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 10
+        problem_id:
+          type: integer
+          example: 1
+        input:
+          type: string
+          example: "3 4\n"
+        expected:
+          type: string
+          example: "7\n"
+
+    TestcaseInput:
+      type: object
+      properties:
+        input:
+          type: string
+          example: "3 4\n"
+        expected:
+          type: string
+          example: "7\n"
+
+    ProblemUpsert:
+      type: object
+      required: [title]
+      properties:
+        id:
+          type: integer
+          description: 省略或 0 則建立新題目；> 0 則更新該題
+          example: 0
+        title:
+          type: string
+          example: A + B Problem
+        description:
+          type: string
+          example: 讀入兩個整數，輸出其和。
+        time_limit:
+          type: integer
+          example: 5
+        testcases:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestcaseInput'
+
+    Submission:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 42
+        operator_id:
+          type: string
+          format: uuid
+        user_id:
+          type: integer
+          example: 1
+        problem_id:
+          type: integer
+          example: 1
+        status:
+          $ref: '#/components/schemas/Status'
+        created_at:
+          type: string
+          format: date-time
+      description: 回應中不含 source_path 欄位
+
+    SubmissionDetail:
+      allOf:
+        - $ref: '#/components/schemas/Submission'
+        - type: object
+          properties:
+            configure_log:
+              type: string
+              description: cmake configure 階段輸出
+            compile_log:
+              type: string
+              description: cmake build 階段輸出
+            output_log:
+              type: string
+              description: 逐測資執行與判題輸出
+
+    ProblemStats:
+      type: object
+      properties:
+        problem_id:
+          type: integer
+          example: 1
+        total:
+          type: integer
+        ac:
+          type: integer
+        wa:
+          type: integer
+        ce:
+          type: integer
+        re:
+          type: integer
+        tle:
+          type: integer
+
+    UserStats:
+      type: object
+      properties:
+        user_id:
+          type: integer
+          example: 1
+        total:
+          type: integer
+          description: 總提交數
+        ac:
+          type: integer
+          description: AC 提交數
+        solved:
+          type: integer
+          description: 解出的相異題數（DISTINCT problem_id WHERE status = AC）
+
+security:
+  - bearerAuth: []
