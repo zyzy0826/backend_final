@@ -12,8 +12,9 @@ CS3060701 期末專案。接收 C++ CMake 專案的 ZIP 壓縮檔，在隔離的
 - [API 端點](#api-端點)
 - [判題流程](#判題流程)
 - [快速開始](#快速開始)
-- [已完成功能](#已完成功能)
-- [待完成事項 To-Do](#待完成事項-to-do)
+- [文件](#文件)
+- [實作狀態](#實作狀態)
+- [加分項](#加分項選做尚未實作)
 
 ---
 
@@ -299,182 +300,75 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 
 ---
 
-## 已完成功能（骨架）
+## 文件
 
-### 核心架構
+完整專案文件位於 [`docs/`](docs/)：
 
-- [x] Go 模組初始化（`module regs`）
-- [x] 環境變數設定（`internal/config/config.go`，支援 `.env`）
-- [x] PostgreSQL 連線池（`pgxpool`，`internal/db/db.go`）
-- [x] 資料庫 Schema（`internal/db/schema.sql`）
-- [x] 所有資料型別定義（`internal/model/model.go`）
+| 文件 | 說明 |
+|------|------|
+| [`docs/openapi.yaml`](docs/openapi.yaml) | **OpenAPI 3.0.3** API 規格，涵蓋全部 16 個端點、request/response schema、JWT bearer 認證與錯誤碼 |
+| [`docs/ERD.md`](docs/ERD.md) | **ERD**（Mermaid）、資料表關聯說明與提交狀態機 |
+| [`docs/測試指南.md`](docs/測試指南.md) | **專案操作說明** — Windows/PowerShell 從零到判題的完整測試步驟與常見問題排解 |
+| [`docs/期末專案說明.md`](docs/期末專案說明.md) | 原始題目需求與配分 |
+| [`docs/判題模式.md`](docs/判題模式.md) | Test-based 判題模式說明 |
 
-### 認證與權限
-
-- [x] JWT 金鑰讀取（`LoadPrivateKey` / `LoadPublicKey`，`middleware/auth.go`）
-- [x] `Claims` struct 定義（UserID / Username / Role）
-- [ ] JWT 簽發 `signToken`（`handler/user_handler.go`）
-- [ ] JWT 驗證 Middleware（`Auth`、`OptionalAuth`）
-- [ ] RBAC 角色判斷（`RequireRole`，`middleware/rbac.go`）
-
-### Repository（資料存取層）
-
-- [x] Struct 定義與 constructor（`UserRepository`、`ProblemRepository`、`SubmissionRepository`）
-- [ ] `UserRepository.Create` / `FindByID` / `FindByUsername`
-- [ ] `ProblemRepository.List` / `FindByID` / `Upsert` / `Delete` / `GetTestcases`
-- [ ] `SubmissionRepository.Create` / `FindByOperatorID` / `ListByUser`
-- [ ] `SubmissionRepository.UpdateStatus` / `UpdateStatusWithLogs`
-- [ ] `SubmissionRepository.GetProblemStats` / `GetUserStats`
-
-### 使用者 API
-
-- [x] 路由掛載（`router.go`）
-- [ ] `POST /api/users/register` — 註冊（bcrypt 雜湊）
-- [ ] `POST /api/users/login` — 登入，回傳 JWT
-- [ ] `POST /api/users/logout` — 登出
-- [ ] `GET /api/users/me` — 取得個人資料
-- [ ] `GET /api/users/{user_id}/submissions` — 指定使用者的提交紀錄
-
-### 題目 API
-
-- [x] 路由掛載（`router.go`）
-- [ ] `GET /api/problems` — 題目列表
-- [ ] `GET /api/problems/{problem_id}` — 題目詳情
-- [ ] `PUT /api/problems` — 建立 / 更新題目（含測資，需用事務）
-- [ ] `DELETE /api/problems/{problem_id}` — 刪除題目
-- [ ] `GET /api/problems/{problem_id}/testcases` — 取得測資（Admin）
-
-### 提交 API
-
-- [x] 路由掛載（`router.go`）
-- [ ] `POST /api/submissions` — 接收 ZIP，非同步判題，立即回傳 `operatorId`
-- [ ] `GET /api/submissions` — 查詢個人提交列表
-- [ ] `GET /api/submissions/{operatorId}` — 判題結果 + 三段 log（需驗證擁有權）
-- [ ] `GET /api/submissions/{operatorId}/source` — 下載原始 ZIP
-
-### 統計 API
-
-- [x] 路由掛載（`router.go`）
-- [ ] `GET /api/stats/problems/{problem_id}` — 題目統計
-- [ ] `GET /api/stats/users/{user_id}` — 使用者統計
-
-### 判題引擎
-
-- [x] Docker CLI runner（`internal/judge/docker.go`，`--rm` 容器，Windows path 轉換）
-- [x] `Judge` struct、`JobInput` struct、`New` constructor
-- [ ] `RunJob` — 完整三階段判題流程（cmake configure → build → 執行）
-- [ ] `extractZip` — ZIP 解壓縮（需含 zip-slip 路徑安全防護）
-- [ ] `done` — 更新狀態與三段日誌
-- [ ] `logFrom` — 合併 stdout + stderr
-
-### 非同步任務
-
-- [x] `Queue` struct、`Job` struct、`New` constructor、`Push` 方法
-- [ ] `Queue.run` — Semaphore 併發控制（buffered channel 模式）
-
-### 基礎設施
-
-- [x] Dockerfile（multi-stage build，alpine）
-- [x] docker-compose.yml（app + db，healthcheck，DooD socket 掛載）
-- [x] Makefile（`run` / `build` / `setup` / `gen-keys` / `migrate` / `docker-up`）
-- [x] `.env.example`
-- [x] `.gitignore`（排除 keys/、storage/、.env）
+> **檢視 OpenAPI**：把 `docs/openapi.yaml` 內容貼到 <https://editor.swagger.io/>，或用 VS Code 的
+> OpenAPI (Swagger) 外掛預覽。
+> **檢視 ERD / 狀態機**：`docs/ERD.md` 的 Mermaid 圖在 GitHub 上會自動渲染。
 
 ---
 
-## 待完成事項 To-Do
+## 實作狀態
 
-### 核心業務邏輯實作
+所有核心業務邏輯皆已實作完成，`go build ./...` 與 `go vet ./...` 通過。
 
-#### `internal/repository/user_repo.go`
-- [ ] `Create` — INSERT INTO users，回傳建立的 User
-- [ ] `FindByID` — SELECT by id
-- [ ] `FindByUsername` — SELECT by username
+### 認證與權限
+- [x] JWT 金鑰讀取、`Claims` 定義
+- [x] `signToken` — ES256 簽發，24h 到期
+- [x] `Auth` / `OptionalAuth` middleware — 強制 ES256 簽章驗證
+- [x] `RequireRole` — RBAC（Admin > User 階層）
 
-#### `internal/repository/problem_repo.go`
-- [ ] `List` — SELECT all problems ORDER BY id
-- [ ] `FindByID` — SELECT by id，找不到回傳錯誤
-- [ ] `Upsert` — 事務：UPDATE（id > 0）或 INSERT，再刪除舊測資並批次 INSERT
-- [ ] `Delete` — DELETE by id
-- [ ] `GetTestcases` — SELECT testcases by problem_id
+### Repository（資料存取層）
+- [x] `UserRepository` — Create / FindByID / FindByUsername
+- [x] `ProblemRepository` — List / FindByID / Upsert（事務＋測資整批替換）/ Delete / GetTestcases
+- [x] `SubmissionRepository` — Create（事務）/ FindByOperatorID（JOIN logs）/ ListByUser / UpdateStatus / UpdateStatusWithLogs（事務＋upsert）/ GetProblemStats / GetUserStats
 
-#### `internal/repository/submission_repo.go`
-- [ ] `Create` — 事務：INSERT submission + INSERT submission_logs（空行）
-- [ ] `FindByOperatorID` — JOIN submissions LEFT JOIN submission_logs WHERE operator_id = $1
-- [ ] `ListByUser` — SELECT by user_id ORDER BY created_at DESC
-- [ ] `UpdateStatus` — UPDATE status WHERE id = $1
-- [ ] `UpdateStatusWithLogs` — 事務：UPDATE submissions + UPDATE submission_logs
-- [ ] `GetProblemStats` — COUNT(*) FILTER (WHERE status = ...) GROUP
-- [ ] `GetUserStats` — COUNT(*) + COUNT(DISTINCT problem_id) FILTER (WHERE status = 'AC')
+### API Handler
+- [x] 使用者 — Register（bcrypt）/ Login / Logout / Me
+- [x] 題目 — List / Get / Upsert / Delete / GetTestcases
+- [x] 提交 — Create（非同步，回 202）/ List / Get / GetSource / GetByUser ＋ `canAccess` 擁有權檢查
+- [x] 統計 — ProblemStats / UserStats
 
-#### `internal/api/middleware/auth.go`
-- [ ] `parseToken` — 從 `Authorization: Bearer <token>` 提取並驗證 ES256 JWT
-- [ ] `setClaims` — 將 Claims（user_id、username、role）寫入 gin.Context
-- [ ] `Auth` — 驗證失敗則 `c.AbortWithStatus(401)`
-- [ ] `OptionalAuth` — 驗證成功才寫 Claims，否則繼續
+### 判題引擎
+- [x] Docker CLI runner（`--rm`、Windows path 轉換、network 隔離）
+- [x] `RunJob` — 三階段（configure→SE ∕ build→CE ∕ 執行→AC·WA·RE·TLE）
+- [x] `extractZip`（含 zip-slip 路徑穿越防護）、`done`、`logFrom`、輸出正規化比對
 
-#### `internal/api/middleware/rbac.go`
-- [ ] `RequireRole` — 從 context 讀取 role，比對 `roleLevel` map，不足則 403
+### 非同步任務
+- [x] `Queue.run` — buffered channel 作為 semaphore 控制最大併發數
 
-#### `internal/api/handler/user_handler.go`
-- [ ] `Register` — Bind JSON → bcrypt hash → userRepo.Create → 201
-- [ ] `Login` — Bind JSON → FindByUsername → CompareHashAndPassword → signToken → 200
-- [ ] `Logout` — JWT 無狀態，回傳 200 + message
-- [ ] `Me` — 從 context 取 user_id → userRepo.FindByID → 200
-- [ ] `signToken` — 建立 Claims（24h 到期），jwt.NewWithClaims(ES256).SignedString
+### 基礎設施
+- [x] Dockerfile / docker-compose（app + db、healthcheck、DooD、db port 開放）/ Makefile / `.env.example` / `.gitignore`
 
-#### `internal/api/handler/problem_handler.go`
-- [ ] `List` — problemRepo.List → 200 JSON
-- [ ] `Get` — 解析 :problem_id → problemRepo.FindByID → 200 或 404
-- [ ] `Upsert` — Bind JSON（id, title, description, time_limit, testcases）→ problemRepo.Upsert → 200
-- [ ] `Delete` — 解析 :problem_id → problemRepo.Delete → 204
-- [ ] `GetTestcases` — 解析 :problem_id → problemRepo.GetTestcases → 200 JSON
+### 文件（評分項）
+- [x] OpenAPI 3.0 規格 — [`docs/openapi.yaml`](docs/openapi.yaml)
+- [x] ERD — [`docs/ERD.md`](docs/ERD.md)
+- [x] 專案操作說明 — [`docs/測試指南.md`](docs/測試指南.md) 及本 README
 
-#### `internal/api/handler/submission_handler.go`
-- [ ] `Create` — 取 user_id、解析 problem_id、接收 .zip → 存檔 → submissionRepo.Create → queue.Push → 202
-- [ ] `List` — 取 user_id → submissionRepo.ListByUser → 200
-- [ ] `Get` — 解析 :operatorId → FindByOperatorID → canAccess 檢查 → 200
-- [ ] `GetSource` — 同上 + c.FileAttachment
-- [ ] `GetByUser` — 解析 :user_id → ListByUser → 200
-- [ ] `canAccess` — role == admin 或 user_id == ownerID
+---
 
-#### `internal/api/handler/stats_handler.go`
-- [ ] `ProblemStats` — 解析 :problem_id → submissionRepo.GetProblemStats → 200
-- [ ] `UserStats` — 解析 :user_id → submissionRepo.GetUserStats → 200
-
-#### `internal/judge/judge.go`
-- [ ] `RunJob` — 完整三階段判題流程：
-  - 設 status = running
-  - `os.MkdirAll` workspace，結束後 `defer os.RemoveAll`
-  - `extractZip` 解壓 ZIP
-  - 確認 CMakeLists.txt 存在，否則 SE
-  - Phase 1：`cmake -G Ninja -B build`（network=bridge, timeout=60s），失敗 → SE
-  - Phase 2：`cmake --build build --verbose`（network=bridge, timeout=120s），失敗 → CE
-  - Phase 3：每個 testcase 寫 input.txt，執行 binary（network=none），比對輸出 → AC/WA/RE/TLE
-  - 呼叫 `done` 寫入最終狀態與三段 log
-- [ ] `extractZip` — zip.OpenReader → 逐檔 path prefix 檢查（防 zip-slip）→ 解壓
-- [ ] `done` — 呼叫 `subRepo.UpdateStatusWithLogs`
-- [ ] `logFrom` — 回傳 `r.Stdout + r.Stderr`（r 為 nil 時回傳空字串）
-
-#### `internal/queue/queue.go`
-- [ ] `run` — `sem := make(chan struct{}, maxConcurrent)`，for range q.jobs 取出 job，`sem <- struct{}{}`，goroutine 執行 RunJob，defer `<-sem`
-
-### 測試與驗證
-
-- [ ] `go mod tidy` — 確認 go.sum 正確
-- [ ] `make migrate` — 確認 schema.sql 在 PostgreSQL 正確執行
-- [ ] 拉取 `yhlib/cs3060701` image，確認 CMake、Ninja、Clang 版本
-- [ ] 端對端測試 — 用 C++ CMake 專案走完完整判題流程
-
-### 文件（評分 10 分）
-
-- [ ] OpenAPI 3.0 規格檔 — `docs/openapi.yaml`，含所有 endpoint、request/response schema、錯誤碼
-- [ ] ERD 圖（Mermaid 或圖片）
-
-### 加分項（選做）
+## 加分項（選做，尚未實作）
 
 - [ ] Rejudge API — `POST /api/submissions/{operatorId}/rejudge`（Admin）
 - [ ] Queue 狀態 API — 查詢佇列深度與 running 數量
 - [ ] JWT 真正登出（token 黑名單，需 Redis 或 DB）
 - [ ] 上傳 ZIP 大小限制
 - [ ] 容器 Memory / CPU 資源限制
+
+---
+
+## 已知限制
+
+- **判題執行檔定位為啟發式**：build 完成後以 `find build -perm -u+x ...` 取第一個可執行檔執行，
+  適用單一 binary 的專案；test-based ∕ 多 target 專案可能需調整 `internal/judge/judge.go` 的 `runScript`。
+- **端對端判題需在具備 Docker 的環境實測**：本機需能拉取 `yhlib/cs3060701` 並啟動判題容器。
