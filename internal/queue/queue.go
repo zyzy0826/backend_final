@@ -4,16 +4,15 @@ import (
 	"context"
 
 	"regs/internal/judge"
-	"regs/internal/model"
 )
 
+// Job carries only identifiers; the judge loads the problem definition from the
+// DB at run time, which keeps rejudge trivial and always up to date.
 type Job struct {
 	SubmissionID int
 	OperatorID   string
 	ProblemID    int
 	ZipPath      string
-	Testcases    []model.Testcase
-	TimeLimit    int
 }
 
 type Queue struct {
@@ -52,8 +51,6 @@ func (q *Queue) run(maxConcurrent int) {
 				OperatorID:   job.OperatorID,
 				ProblemID:    job.ProblemID,
 				ZipPath:      job.ZipPath,
-				Testcases:    job.Testcases,
-				TimeLimit:    job.TimeLimit,
 			})
 		}(job)
 	}

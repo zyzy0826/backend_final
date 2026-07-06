@@ -19,6 +19,9 @@ type Config struct {
 	HostStoragePath   string
 	MaxConcurrentJobs int
 	TimeLimitSeconds  int
+	MaxUploadMB       int
+	JudgeMemoryLimit  string // e.g. "512m"; empty disables the limit
+	JudgeCPULimit     string // e.g. "1.0";  empty disables the limit
 }
 
 func Load() *Config {
@@ -26,6 +29,7 @@ func Load() *Config {
 
 	maxJobs, _ := strconv.Atoi(getEnv("MAX_CONCURRENT_JOBS", "3"))
 	timeLimit, _ := strconv.Atoi(getEnv("TIME_LIMIT_SECONDS", "10"))
+	maxUploadMB, _ := strconv.Atoi(getEnv("MAX_UPLOAD_MB", "64"))
 
 	storagePath := getEnv("STORAGE_PATH", "./storage")
 
@@ -39,6 +43,9 @@ func Load() *Config {
 		HostStoragePath:   getEnv("HOST_STORAGE_PATH", storagePath),
 		MaxConcurrentJobs: maxJobs,
 		TimeLimitSeconds:  timeLimit,
+		MaxUploadMB:       maxUploadMB,
+		JudgeMemoryLimit:  getEnv("JUDGE_MEMORY_LIMIT", "512m"),
+		JudgeCPULimit:     getEnv("JUDGE_CPU_LIMIT", "1.0"),
 	}
 }
 
