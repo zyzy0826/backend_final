@@ -25,12 +25,31 @@ type User struct {
 
 // --- Problem ---
 
+// Judge modes: a problem with an uploaded package ZIP (CMakeLists + spec cases)
+// is judged test-based; otherwise it falls back to stdin/stdout comparison
+// against the testcases table.
+const (
+	JudgeModeIO        = "io"
+	JudgeModeTestBased = "test-based"
+)
+
 type Problem struct {
 	ID          int       `json:"id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	TimeLimit   int       `json:"time_limit"`
+	PackagePath string    `json:"-"`
+	JudgeMode   string    `json:"judge_mode"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// ResolveJudgeMode derives JudgeMode from whether a problem package is present.
+func (p *Problem) ResolveJudgeMode() {
+	if p.PackagePath != "" {
+		p.JudgeMode = JudgeModeTestBased
+	} else {
+		p.JudgeMode = JudgeModeIO
+	}
 }
 
 type Testcase struct {

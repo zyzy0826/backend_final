@@ -11,8 +11,12 @@ CREATE TABLE IF NOT EXISTS problems (
     title        VARCHAR(255) NOT NULL,
     description  TEXT         NOT NULL DEFAULT '',
     time_limit   INT          NOT NULL DEFAULT 5,
+    package_path VARCHAR(512) NOT NULL DEFAULT '',
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+
+-- Migration for databases created before package_path was added.
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS package_path VARCHAR(512) NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS testcases (
     id         SERIAL PRIMARY KEY,
