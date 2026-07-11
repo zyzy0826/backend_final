@@ -27,6 +27,8 @@ func main() {
 	for _, dir := range []string{
 		fmt.Sprintf("%s/uploads", cfg.StoragePath),
 		fmt.Sprintf("%s/workspace", cfg.StoragePath),
+		fmt.Sprintf("%s/problems", cfg.StoragePath),
+		fmt.Sprintf("%s/logs", cfg.StoragePath),
 	} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			log.Fatalf("mkdir %s: %v", dir, err)
@@ -56,18 +58,18 @@ func main() {
 	submissionRepo := repository.NewSubmissionRepository(pool)
 
 	// Judge engine
-	dockerRunner, err := judge.NewDockerRunner(cfg.DockerImage)
+	dockerRunner, err := judge.NewDockerRunner(cfg.DockerImage, cfg.JudgeMemoryLimit, cfg.JudgeCPULimit)
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
-	jdg := judge.New(dockerRunner, submissionRepo, cfg)
+	jdg := judge.New(dockerRunner, submissionRepo, problemRepo, cfg)
 
 	// Job queue (with concurrency semaphore)
 	q := queue.New(cfg.MaxConcurrentJobs, jdg)
 
 	// Handlers
 	userHandler := handler.NewUserHandler(userRepo, privateKey)
-	problemHandler := handler.NewProblemHandler(problemRepo)
+	problemHandler := handler.NewProblemHandler(problemRepo, cfg)
 	submissionHandler := handler.NewSubmissionHandler(submissionRepo, problemRepo, q, cfg)
 	statsHandler := handler.NewStatsHandler(submissionRepo)
 

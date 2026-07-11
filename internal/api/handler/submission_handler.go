@@ -2,7 +2,9 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -48,18 +50,12 @@ func (h *SubmissionHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Ensure the problem exists and pull its testcases + time limit up front.
-	problem, err := h.problemRepo.FindByID(c.Request.Context(), problemID)
-	if err != nil {
+	// Ensure the problem exists before accepting the upload.
+	if _, err := h.problemRepo.FindByID(c.Request.Context(), problemID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "problem not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	testcases, err := h.problemRepo.GetTestcases(c.Request.Context(), problemID)
-	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -71,6 +67,11 @@ func (h *SubmissionHandler) Create(c *gin.Context) {
 	}
 	if !strings.HasSuffix(strings.ToLower(fileHeader.Filename), ".zip") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file must be a .zip archive"})
+		return
+	}
+	if fileHeader.Size > int64(h.cfg.MaxUploadMB)<<20 {
+		c.JSON(http.StatusRequestEntityTooLarge,
+			gin.H{"error": fmt.Sprintf("file exceeds %d MB limit", h.cfg.MaxUploadMB)})
 		return
 	}
 
@@ -87,21 +88,107 @@ func (h *SubmissionHandler) Create(c *gin.Context) {
 		return
 	}
 
-	timeLimit := problem.TimeLimit
-	if timeLimit <= 0 {
-		timeLimit = h.cfg.TimeLimitSeconds
-	}
-
 	h.queue.Push(queue.Job{
 		SubmissionID: sub.ID,
 		OperatorID:   operatorID,
 		ProblemID:    problemID,
 		ZipPath:      zipPath,
-		Testcases:    testcases,
-		TimeLimit:    timeLimit,
 	})
 
 	c.JSON(http.StatusAccepted, gin.H{"operator_id": operatorID})
+}
+
+// Rejudge handles POST /api/submissions/:operatorId/rejudge — resets the
+// submission and pushes it back onto the job queue.
+func (h *SubmissionHandler) Rejudge(c *gin.Context) {
+	operatorID := c.Param("operatorId")
+
+	detail, err := h.submissionRepo.FindByOperatorID(c.Request.Context(), operatorID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "submission not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.canAccess(c, detail.UserID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	if detail.Status == model.StatusPending || detail.Status == model.StatusRunning {
+		c.JSON(http.StatusConflict, gin.H{"error": "submission is already queued or running"})
+		return
+	}
+	if detail.SourcePath == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "source archive no longer available"})
+		return
+	}
+
+	if err := h.submissionRepo.ResetForRejudge(c.Request.Context(), detail.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.queue.Push(queue.Job{
+		SubmissionID: detail.ID,
+		OperatorID:   operatorID,
+		ProblemID:    detail.ProblemID,
+		ZipPath:      detail.SourcePath,
+	})
+
+	c.JSON(http.StatusAccepted, gin.H{"operator_id": operatorID, "status": model.StatusPending})
+}
+
+var logFileNames = map[string]string{
+	"configure": "configure.log",
+	"compile":   "compile.log",
+	"output":    "output.log",
+}
+
+// GetLog handles GET /api/submissions/:operatorId/logs/:phase — serves one log
+// segment (configure|compile|output) from its physical file, falling back to
+// the DB copy for legacy records.
+func (h *SubmissionHandler) GetLog(c *gin.Context) {
+	operatorID := c.Param("operatorId")
+	phase := c.Param("phase")
+
+	fileName, ok := logFileNames[phase]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "phase must be one of: configure, compile, output"})
+		return
+	}
+
+	detail, err := h.submissionRepo.FindByOperatorID(c.Request.Context(), operatorID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "submission not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.canAccess(c, detail.UserID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	logPath := filepath.Join(h.cfg.StoragePath, "logs", operatorID, fileName)
+	if data, err := os.ReadFile(logPath); err == nil {
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", data)
+		return
+	}
+
+	var content string
+	switch phase {
+	case "configure":
+		content = detail.ConfigureLog
+	case "compile":
+		content = detail.CompileLog
+	case "output":
+		content = detail.OutputLog
+	}
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(content))
 }
 
 // List handles GET /api/submissions — returns the authenticated user's submissions.

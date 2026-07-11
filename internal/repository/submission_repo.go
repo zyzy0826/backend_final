@@ -89,6 +89,27 @@ func (r *SubmissionRepository) ListByUser(ctx context.Context, userID int) ([]mo
 	return subs, rows.Err()
 }
 
+// ResetForRejudge puts a submission back to pending and clears its previous logs,
+// so a re-run starts from a clean slate.
+func (r *SubmissionRepository) ResetForRejudge(ctx context.Context, id int) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err = tx.Exec(ctx, `UPDATE submissions SET status = 'pending' WHERE id = $1`, id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE submission_logs
+		SET configure_log = '', compile_log = '', output_log = ''
+		WHERE submission_id = $1`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (r *SubmissionRepository) UpdateStatus(ctx context.Context, id int, status model.Status) error {
 	_, err := r.db.Exec(ctx, `UPDATE submissions SET status = $1 WHERE id = $2`, status, id)
 	return err

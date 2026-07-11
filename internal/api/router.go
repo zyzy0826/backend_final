@@ -50,10 +50,12 @@ func SetupRouter(
 	// Submission routes
 	submissions := api.Group("/submissions", auth, requireUser)
 	{
-		submissions.POST("", submissionHandler.Create)                      // User+
-		submissions.GET("", submissionHandler.List)                         // User+
-		submissions.GET("/:operatorId", submissionHandler.Get)              // User+ (owner or admin)
-		submissions.GET("/:operatorId/source", submissionHandler.GetSource) // User+ (owner or admin)
+		submissions.POST("", submissionHandler.Create)                        // User+
+		submissions.GET("", submissionHandler.List)                           // User+
+		submissions.GET("/:operatorId", submissionHandler.Get)                // User+ (owner or admin)
+		submissions.GET("/:operatorId/source", submissionHandler.GetSource)   // User+ (owner or admin)
+		submissions.GET("/:operatorId/logs/:phase", submissionHandler.GetLog) // User+ (owner or admin)
+		submissions.POST("/:operatorId/rejudge", submissionHandler.Rejudge)   // User+ (owner or admin)
 	}
 
 	// Stats routes (Guest-accessible)
