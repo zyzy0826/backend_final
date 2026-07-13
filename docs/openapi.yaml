@@ -10,7 +10,7 @@ info:
     - `Guest`：無需 `Authorization` header
     - `User` / `Admin`：需帶 `Authorization: Bearer <JWT>`（ES256 簽章）
     - 標注為 Guest 的端點所有人皆可存取；標注 User 的 Admin 也可；標注 Admin 僅管理者。
-  version: 1.1.0
+  version: 1.1.1
 
 servers:
   - url: http://localhost:8080
@@ -605,6 +605,13 @@ components:
           type: integer
           description: 每個測資的執行秒數上限
           example: 5
+        judge_mode:
+          type: string
+          description: |
+            判題模式，依該題是否有上傳題目包即時推導：
+            `io`（stdin/stdout 比對 testcases）或 `test-based`（題目包 + ctest）。
+          enum: [io, test-based]
+          example: io
         created_at:
           type: string
           format: date-time
