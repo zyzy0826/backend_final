@@ -324,7 +324,7 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 
 | 文件 | 說明 |
 |------|------|
-| [`docs/openapi.yaml`](docs/openapi.yaml) | **OpenAPI 3.0.3** API 規格，涵蓋全部 16 個端點、request/response schema、JWT bearer 認證與錯誤碼 |
+| [`docs/openapi.yaml`](docs/openapi.yaml) | **OpenAPI 3.0.3** API 規格，涵蓋全部 18 個操作（含 rejudge 與分段 log 查詢）、request/response schema、JWT bearer 認證與錯誤碼 |
 | [`docs/ERD.md`](docs/ERD.md) | **ERD**（Mermaid）、資料表關聯說明與提交狀態機 |
 | [`docs/測試指南.md`](docs/測試指南.md) | **專案操作說明** — Windows/PowerShell 從零到判題的完整測試步驟與常見問題排解 |
 | [`docs/期末專案說明.md`](docs/期末專案說明.md) | 原始題目需求與配分 |
@@ -338,7 +338,7 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 
 ## 實作狀態
 
-所有核心業務邏輯皆已實作完成，`go build ./...` 與 `go vet ./...` 通過。
+所有核心業務邏輯皆已實作完成，`go build ./...`、`go vet ./...` 與 `go test ./...` 通過。
 
 ### 認證與權限
 - [x] JWT 金鑰讀取、`Claims` 定義
@@ -364,13 +364,16 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 - [x] 執行階段資源限制 — `--memory` / `--cpus` / `--pids-limit`（`JUDGE_MEMORY_LIMIT` / `JUDGE_CPU_LIMIT`）
 - [x] `RunJob` — 三階段（configure→SE ∕ build→CE ∕ 執行→AC·WA·RE·TLE），雙模式（I/O 比對 ∕ test-based ctest）
 - [x] 三段 log 同步寫入 DB 與實體檔案 `storage/logs/{operatorId}/{configure,compile,output}.log`
-- [x] `extractZip`（含 zip-slip 路徑穿越防護）、`done`、`logFrom`、輸出正規化比對
+- [x] `extractZip`（含 zip-slip 路徑穿越防護、反斜線分隔符正規化，相容 Windows PowerShell 打包的 ZIP）、`done`、`logFrom`、輸出正規化比對
+
+### 測試
+- [x] `internal/judge/extract_test.go` — ZIP 反斜線正規化與 zip-slip 防護的回歸測試（`go test ./...` 通過）
 
 ### 非同步任務
 - [x] `Queue.run` — buffered channel 作為 semaphore 控制最大併發數
 
 ### 基礎設施
-- [x] Dockerfile / docker-compose（app + db、healthcheck、DooD、db port 開放）/ Makefile / `.env.example` / `.gitignore`
+- [x] Dockerfile（builder `golang:1.25`、runtime 內含 `docker-cli` 供 DooD）/ docker-compose（app + db、healthcheck、DooD、db port 開放）/ Makefile / `.env.example` / `.gitignore`
 
 ### 文件（評分項）
 - [x] OpenAPI 3.0 規格 — [`docs/openapi.yaml`](docs/openapi.yaml)
