@@ -491,7 +491,13 @@ func extractZip(zipPath, destPath string) error {
 	}
 
 	for _, f := range reader.File {
-		target := filepath.Join(destPath, f.Name)
+		// Windows PowerShell's Compress-Archive writes entry names with backslash
+		// separators, which violate the ZIP spec (forward slash only). On Linux a
+		// backslash is an ordinary filename character, so "cmake\AddJudge.cmake"
+		// would extract as a single oddly-named file at the root instead of
+		// cmake/AddJudge.cmake, collapsing every nested directory. Normalize first.
+		name := strings.ReplaceAll(f.Name, "\\", "/")
+		target := filepath.Join(destPath, name)
 		targetAbs, err := filepath.Abs(target)
 		if err != nil {
 			return err
