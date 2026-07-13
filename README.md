@@ -14,7 +14,8 @@ CS3060701 期末專案。接收 C++ CMake 專案的 ZIP 壓縮檔，在隔離的
 - [快速開始](#快速開始)
 - [文件](#文件)
 - [實作狀態](#實作狀態)
-- [加分項](#加分項選做尚未實作)
+- [加分項](#加分項)
+- [已知限制](#已知限制)
 
 ---
 
@@ -22,7 +23,7 @@ CS3060701 期末專案。接收 C++ CMake 專案的 ZIP 壓縮檔，在隔離的
 
 | 層級 | 技術 |
 |------|------|
-| 語言 | Go 1.22 |
+| 語言 | Go 1.25 |
 | HTTP 框架 | Gin |
 | 資料庫 | PostgreSQL 16 + pgx/v5 |
 | 容器引擎 | Docker CLI via `os/exec`（`docker run --rm`） |
@@ -77,7 +78,9 @@ backend_final/
 │
 ├── storage/                     # 執行期產生（已加入 .gitignore）
 │   ├── uploads/                 # 上傳的 .zip 檔案（以 operatorId 命名）
-│   └── workspace/               # 解壓後的工作目錄（掛載至 Docker）
+│   ├── workspace/               # 解壓後的工作目錄（掛載至 Docker）
+│   ├── problems/                # test-based 題目包 ZIP（以題目 id 命名）
+│   └── logs/                    # 每筆提交的三段實體日誌（configure/compile/output.log）
 │
 ├── keys/                        # EC 金鑰（已加入 .gitignore）
 │   ├── private.pem
@@ -101,8 +104,9 @@ backend_final/
 │ username    │       │ title            │  1:N  │ problem_id (FK)      │
 │ password    │       │ description      │       │ input                │
 │ role        │       │ time_limit (sec) │       │ expected             │
-│ created_at  │       │ created_at       │       └──────────────────────┘
-└──────┬──────┘       └────────┬─────────┘
+│ created_at  │       │ package_path     │       └──────────────────────┘
+└──────┬──────┘       │ created_at       │
+       │              └────────┬─────────┘
        │ 1:N                   │ 1:N
        ▼                       ▼
 ┌──────────────────────────────────────────────┐
@@ -186,6 +190,8 @@ backend_final/
 | `GET` | `/api/submissions` | 查詢個人提交列表 | User |
 | `GET` | `/api/submissions/{operatorId}` | 取得判題結果與三段 log | User（本人或 Admin） |
 | `GET` | `/api/submissions/{operatorId}/source` | 下載原始 ZIP | User（本人或 Admin） |
+| `GET` | `/api/submissions/{operatorId}/logs/{phase}` | 分段查詢單一階段 log（configure / compile / output） | User（本人或 Admin） |
+| `POST` | `/api/submissions/{operatorId}/rejudge` | 重新評測（重設為 pending 並重新排入佇列） | User（本人或 Admin） |
 
 ### Statistics
 
@@ -230,6 +236,15 @@ POST /api/submissions (multipart: file=.zip, problem_id=N)
            寫入 output.log
 ```
 
+上圖為 **I/O 比對模式**（題目測資存於 DB）。若題目上傳了題目包 ZIP（test-based 模式），
+流程改為：以題目包的 CMake 專案 configure（`-D SOURCE_ROOT=` 指向學生原始碼）→ build →
+以 `ctest --show-only=json-v1` 列舉測試目標，每個 case 在獨立斷網容器中執行，
+exit code 0 → PASS、非 0 → WA、125+ → RE、逾時 → TLE。
+
+三段 log 除寫入 DB 外，同時落地為 `storage/logs/{operatorId}/` 下的
+`configure.log`、`compile.log`、`output.log` 實體檔案，可由
+`GET /api/submissions/{operatorId}/logs/{phase}` 分段查詢。
+
 ### 關於 Docker-out-of-Docker（DooD）
 
 app 容器透過掛載 `/var/run/docker.sock` 操控宿主機的 Docker daemon。  
@@ -238,6 +253,9 @@ volume mount 路徑必須是**宿主機上的路徑**，因此需設定 `HOST_ST
 ```
 # .env 範例（當 app 跑在 Docker 內時）
 HOST_STORAGE_PATH=/home/user/backend_final/storage
+
+# Windows + Docker Desktop 需使用 WSL 形式的宿主機路徑（不能用 D:\... 形式）
+HOST_STORAGE_PATH=/run/desktop/mnt/host/d/myData/projects/backend_final/storage
 ```
 
 本機直接執行（`go run`）時，`HOST_STORAGE_PATH` 與 `STORAGE_PATH` 相同，不需特別設定。
@@ -335,13 +353,17 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 
 ### API Handler
 - [x] 使用者 — Register（bcrypt）/ Login / Logout / Me
-- [x] 題目 — List / Get / Upsert / Delete / GetTestcases
+- [x] 題目 — List / Get / Upsert（JSON 測資或 multipart 題目包）/ Delete / GetTestcases
 - [x] 提交 — Create（非同步，回 202）/ List / Get / GetSource / GetByUser ＋ `canAccess` 擁有權檢查
+- [x] 提交 — GetLog（分段 log，實體檔案優先）/ Rejudge（重設後重新入佇列）
 - [x] 統計 — ProblemStats / UserStats
+- [x] 上傳大小限制（`MAX_UPLOAD_MB`，提交與題目包皆適用）
 
 ### 判題引擎
-- [x] Docker CLI runner（`--rm`、Windows path 轉換、network 隔離）
-- [x] `RunJob` — 三階段（configure→SE ∕ build→CE ∕ 執行→AC·WA·RE·TLE）
+- [x] Docker CLI runner（`--rm`、Windows path 轉換、network 隔離、TLE 時 `docker kill` 防孤兒容器）
+- [x] 執行階段資源限制 — `--memory` / `--cpus` / `--pids-limit`（`JUDGE_MEMORY_LIMIT` / `JUDGE_CPU_LIMIT`）
+- [x] `RunJob` — 三階段（configure→SE ∕ build→CE ∕ 執行→AC·WA·RE·TLE），雙模式（I/O 比對 ∕ test-based ctest）
+- [x] 三段 log 同步寫入 DB 與實體檔案 `storage/logs/{operatorId}/{configure,compile,output}.log`
 - [x] `extractZip`（含 zip-slip 路徑穿越防護）、`done`、`logFrom`、輸出正規化比對
 
 ### 非同步任務
@@ -357,18 +379,28 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 
 ---
 
-## 加分項（選做，尚未實作）
+## 加分項
 
-- [ ] Rejudge API — `POST /api/submissions/{operatorId}/rejudge`（Admin）
+已實作：
+
+- [x] Rejudge API — `POST /api/submissions/{operatorId}/rejudge`（本人或 Admin），重判時重新載入最新題目定義
+- [x] 分段日誌 API — `GET /api/submissions/{operatorId}/logs/{phase}`，並落地為實體 log 檔
+- [x] 上傳 ZIP 大小限制（`MAX_UPLOAD_MB`）
+- [x] 容器 Memory / CPU / PID 資源限制
+
+尚未實作（選做）：
+
 - [ ] Queue 狀態 API — 查詢佇列深度與 running 數量
 - [ ] JWT 真正登出（token 黑名單，需 Redis 或 DB）
-- [ ] 上傳 ZIP 大小限制
-- [ ] 容器 Memory / CPU 資源限制
 
 ---
 
 ## 已知限制
 
-- **判題執行檔定位為啟發式**：build 完成後以 `find build -perm -u+x ...` 取第一個可執行檔執行，
-  適用單一 binary 的專案；test-based ∕ 多 target 專案可能需調整 `internal/judge/judge.go` 的 `runScript`。
-- **端對端判題需在具備 Docker 的環境實測**：本機需能拉取 `yhlib/cs3060701` 並啟動判題容器。
+- **判題執行檔定位為啟發式**（I/O 模式）：build 完成後以 `find build -perm -u+x ...` 取第一個可執行檔執行，
+  適用單一 binary 的專案；多 target 專案可能需調整 `internal/judge/judge.go` 的 `runScript`。
+- **TLE 計時包含容器啟動時間**：時限是對整個 `docker run` 計時。在容器啟動較慢的環境
+  （如部分 Windows Docker Desktop 主機，實測啟動一個容器可達 10 秒以上），
+  題目 `time_limit` 需相應放寬，否則會誤判 TLE。
+- **既有資料庫的 schema 變更需手動套用**：`schema.sql` 只在 db volume 首次建立時由
+  initdb 自動執行；已存在的 volume 需執行 `make migrate`（或對 db 容器重跑 schema.sql）。

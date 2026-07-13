@@ -12,9 +12,10 @@ keys/
 storage/
 
 # Go
-go.sum
 vendor/
 
 # IDE
 .vscode/
 .idea/
+
+.claude/

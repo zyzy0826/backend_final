@@ -10,7 +10,7 @@ info:
     - `Guest`：無需 `Authorization` header
     - `User` / `Admin`：需帶 `Authorization: Bearer <JWT>`（ES256 簽章）
     - 標注為 Guest 的端點所有人皆可存取；標注 User 的 Admin 也可；標注 Admin 僅管理者。
-  version: 1.0.0
+  version: 1.1.0
 
 servers:
   - url: http://localhost:8080
@@ -157,7 +157,12 @@ paths:
       summary: 建立或更新題目（含測資）
       description: |
         `id > 0` 時更新既有題目（若該 id 不存在則以此 id 建立）；`id` 省略或為 0 時建立新題目。
-        每次呼叫會以送入的 `testcases` **整批取代**該題所有測資（在單一交易內完成）。
+
+        依 Content-Type 決定判題模式：
+        - `application/json`：附上 inline `testcases`（input / expected），採 **I/O 比對**判題。
+          每次呼叫會以送入的 `testcases` **整批取代**該題所有測資（在單一交易內完成）。
+        - `multipart/form-data`：上傳題目包 ZIP（根目錄含 CMakeLists.txt 與 spec 測資），
+          採 **test-based** 判題，檔案存於 storage/problems/{id}.zip。
       responses:
         '200':
           description: 建立 / 更新後的題目
@@ -177,6 +182,26 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ProblemUpsert'
+          multipart/form-data:
+            schema:
+              type: object
+              required: [title, file]
+              properties:
+                id:
+                  type: integer
+                  description: 省略或 0 表示建立新題目
+                title:
+                  type: string
+                  example: Complex 運算
+                description:
+                  type: string
+                time_limit:
+                  type: integer
+                  description: 單一測資的秒數上限；省略或 0 使用伺服器預設
+                file:
+                  type: string
+                  format: binary
+                  description: 題目包 ZIP（根目錄含 CMakeLists.txt）
 
   /api/problems/{problem_id}:
     get:
@@ -217,22 +242,29 @@ paths:
   /api/problems/{problem_id}/testcases:
     get:
       tags: [Problem]
-      summary: 取得題目的所有測資（Admin）
+      summary: 下載題目測資（Admin）
+      description: test-based 題目回傳題目包 ZIP；I/O 題目回傳 JSON 測資列表。
       parameters:
         - $ref: '#/components/parameters/ProblemID'
       responses:
         '200':
-          description: 測資列表
+          description: 測資列表（I/O 題目）或題目包 ZIP（test-based 題目）
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/Testcase'
+            application/zip:
+              schema:
+                type: string
+                format: binary
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /api/submissions:
     post:
@@ -338,6 +370,82 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /api/submissions/{operatorId}/logs/{phase}:
+    get:
+      tags: [Submission]
+      summary: 取得單一階段的評測日誌
+      description: |
+        僅提交者本人或 Admin 可存取。分段查詢 configure / compile / output 其中一段日誌，
+        優先讀取 `storage/logs/{operatorId}/` 下的實體檔案（configure.log、compile.log、output.log），
+        找不到檔案時退回資料庫中的副本（相容舊紀錄）。
+      parameters:
+        - $ref: '#/components/parameters/OperatorID'
+        - name: phase
+          in: path
+          required: true
+          description: 日誌階段
+          schema:
+            type: string
+            enum: [configure, compile, output]
+      responses:
+        '200':
+          description: 該階段日誌（純文字）
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  -- Configuring done (4.2s)
+                  -- Generating done (0.0s)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/submissions/{operatorId}/rejudge:
+    post:
+      tags: [Submission]
+      summary: 重新評測提交（Rejudge）
+      description: |
+        僅提交者本人或 Admin 可觸發。將提交重設為 `pending`、清除三段日誌後重新排入任務佇列。
+        評測時會重新載入題目的**最新定義**（測資 / 題目包 / 時限），因此改題後可直接重判。
+      parameters:
+        - $ref: '#/components/parameters/OperatorID'
+      responses:
+        '202':
+          description: 已重新排入佇列
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  operator_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: pending
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 提交不存在，或原始 ZIP 已無法取得
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 提交仍在佇列中或評測中，不可重判
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/stats/problems/{problem_id}:
     get:

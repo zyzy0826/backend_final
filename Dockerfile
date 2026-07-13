@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
@@ -12,7 +12,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
 
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates
+# docker-cli: the judge spawns sibling containers through the mounted
+# /var/run/docker.sock (DooD), which requires the docker client binary.
+RUN apk add --no-cache ca-certificates docker-cli
 
 WORKDIR /app
 
