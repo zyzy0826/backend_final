@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"regs/internal/config"
+	"regs/internal/judge"
 	"regs/internal/model"
 	"regs/internal/queue"
 	"regs/internal/repository"
@@ -80,6 +82,14 @@ func (h *SubmissionHandler) Create(c *gin.Context) {
 	if err := c.SaveUploadedFile(fileHeader, zipPath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save uploaded file"})
 		return
+	}
+
+	// Unpack the archive into the workspace immediately on upload. Both the ZIP
+	// and the extracted files are kept; the judge reuses them and does not delete
+	// the workspace afterwards. A failure here is non-fatal — the judge re-extracts
+	// as a fallback and reports the error as a proper judge result.
+	if err := judge.PrepareWorkspace(h.cfg, operatorID, zipPath); err != nil {
+		log.Printf("submission %s: workspace pre-extract failed, will retry at judge time: %v", operatorID, err)
 	}
 
 	sub, err := h.submissionRepo.Create(c.Request.Context(), userID, problemID, operatorID, zipPath)

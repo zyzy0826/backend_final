@@ -71,20 +71,27 @@ func (j *Judge) RunJob(ctx context.Context, job JobInput) {
 		timeLimit = j.cfg.TimeLimitSeconds
 	}
 
-	// Per-submission workspace, wiped first (a rejudge may leave stale files)
-	// and always cleaned up when the job finishes.
-	workspace := filepath.Join(j.cfg.StoragePath, "workspace", job.OperatorID)
-	os.RemoveAll(workspace)
+	// Per-submission workspace. The uploaded ZIP is unpacked into src/ at upload
+	// time and both the archive and the extracted files are kept afterwards, so
+	// the workspace is intentionally NOT removed when the job finishes. Only the
+	// artifacts of a previous run (build/, problem/) are wiped so a rejudge
+	// starts from a clean build while reusing the already-extracted sources.
+	workspace := workspaceDir(j.cfg, job.OperatorID)
 	srcDir := filepath.Join(workspace, "src")
-	if err := os.MkdirAll(srcDir, 0755); err != nil {
-		j.done(ctx, job, model.StatusSE, "failed to create workspace: "+err.Error(), "", "")
-		return
-	}
-	defer os.RemoveAll(workspace)
+	os.RemoveAll(filepath.Join(workspace, "build"))
+	os.RemoveAll(filepath.Join(workspace, "problem"))
 
-	if err := extractZip(job.ZipPath, srcDir); err != nil {
-		j.done(ctx, job, model.StatusSE, "failed to extract submission ZIP: "+err.Error(), "", "")
-		return
+	// Fallback: if the sources are not present (e.g. a rejudge after the
+	// workspace was cleaned manually), re-extract them from the stored ZIP.
+	if !dirHasEntries(srcDir) {
+		if err := os.MkdirAll(srcDir, 0755); err != nil {
+			j.done(ctx, job, model.StatusSE, "failed to create workspace: "+err.Error(), "", "")
+			return
+		}
+		if err := extractZip(job.ZipPath, srcDir); err != nil {
+			j.done(ctx, job, model.StatusSE, "failed to extract submission ZIP: "+err.Error(), "", "")
+			return
+		}
 	}
 
 	// The Docker daemon mounts a path on the HOST machine, which differs from the
@@ -337,6 +344,35 @@ func (j *Judge) runIOMode(ctx context.Context, job JobInput, workspace, hostWork
 }
 
 // --- Shared helpers ----------------------------------------------------------
+
+// workspaceDir returns the per-submission workspace directory under StoragePath.
+func workspaceDir(cfg *config.Config, operatorID string) string {
+	return filepath.Join(cfg.StoragePath, "workspace", operatorID)
+}
+
+// PrepareWorkspace unpacks the uploaded ZIP into the submission workspace's src/
+// directory. It is called at upload time so the extracted sources are available
+// in the workspace before (and independently of) judging. Any previously
+// extracted sources are replaced.
+func PrepareWorkspace(cfg *config.Config, operatorID, zipPath string) error {
+	srcDir := filepath.Join(workspaceDir(cfg, operatorID), "src")
+	os.RemoveAll(srcDir)
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		return err
+	}
+	if err := extractZip(zipPath, srcDir); err != nil {
+		// Leave no partial extraction behind, so the judge's fallback re-extracts.
+		os.RemoveAll(srcDir)
+		return err
+	}
+	return nil
+}
+
+// dirHasEntries reports whether dir exists and contains at least one entry.
+func dirHasEntries(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	return err == nil && len(entries) > 0
+}
 
 // done persists the final status plus logs to the DB, and also writes the three
 // log segments as physical files under storage/logs/{operatorId}/.
