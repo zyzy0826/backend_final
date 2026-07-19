@@ -99,7 +99,17 @@ func (h *ProblemHandler) upsertWithPackage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing title"})
 		return
 	}
-	id, _ := strconv.Atoi(c.PostForm("id"))                // optional: 0 → create new
+	// id is optional: absent/empty or <= 0 → create new; a positive id upserts.
+	// A non-empty but non-numeric id is a client error rather than "create".
+	id := 0
+	if raw := c.PostForm("id"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+			return
+		}
+		id = parsed
+	}
 	timeLimit, _ := strconv.Atoi(c.PostForm("time_limit")) // optional: 0 → server default
 
 	fileHeader, err := c.FormFile("file")

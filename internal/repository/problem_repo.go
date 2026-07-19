@@ -62,6 +62,9 @@ func (r *ProblemRepository) Upsert(ctx context.Context, p *model.Problem, testca
 
 	var result model.Problem
 
+	// id <= 0 (absent, zero, or negative) always means "create a new problem"
+	// with a server-assigned id; only a positive id updates (or inserts with
+	// that explicit id).
 	if p.ID > 0 {
 		// Try to update an existing problem first (package_path is managed
 		// separately via UpdatePackagePath and left untouched here).
