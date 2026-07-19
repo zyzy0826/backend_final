@@ -42,6 +42,22 @@ func (r *UserRepository) FindByID(ctx context.Context, id int) (*model.User, err
 	return &u, nil
 }
 
+// EnsureUser inserts a user with the given role only if the username is not
+// already taken. It is idempotent — on a duplicate username it does nothing and
+// returns created=false. Used to seed fixed accounts (e.g. admin) on startup.
+func (r *UserRepository) EnsureUser(ctx context.Context, username, passwordHash string, role model.Role) (created bool, err error) {
+	const q = `
+		INSERT INTO users (username, password, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (username) DO NOTHING`
+
+	tag, err := r.db.Exec(ctx, q, username, passwordHash, role)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (r *UserRepository) FindByUsername(ctx context.Context, username string) (*model.User, error) {
 	const q = `SELECT id, username, password, role, created_at FROM users WHERE username = $1`
 

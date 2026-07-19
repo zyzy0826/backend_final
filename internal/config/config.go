@@ -22,6 +22,8 @@ type Config struct {
 	MaxUploadMB       int
 	JudgeMemoryLimit  string // e.g. "512m"; empty disables the limit
 	JudgeCPULimit     string // e.g. "1.0";  empty disables the limit
+	SeedAdminUsername string // seed admin account on startup; empty disables seeding
+	SeedAdminPassword string // plaintext; hashed before insert
 }
 
 func Load() *Config {
@@ -46,6 +48,8 @@ func Load() *Config {
 		MaxUploadMB:       maxUploadMB,
 		JudgeMemoryLimit:  getEnv("JUDGE_MEMORY_LIMIT", "512m"),
 		JudgeCPULimit:     getEnv("JUDGE_CPU_LIMIT", "1.0"),
+		SeedAdminUsername: getEnv("SEED_ADMIN_USERNAME", "admin"),
+		SeedAdminPassword: getEnv("SEED_ADMIN_PASSWORD", "admin1234"),
 	}
 }
 

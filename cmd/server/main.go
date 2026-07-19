@@ -16,9 +16,34 @@ import (
 	"regs/internal/config"
 	"regs/internal/db"
 	"regs/internal/judge"
+	"regs/internal/model"
 	"regs/internal/queue"
 	"regs/internal/repository"
+
+	"golang.org/x/crypto/bcrypt"
 )
+
+// seedAdmin creates the configured admin account if it does not already exist.
+// It is idempotent: existing accounts are left untouched, so restarts are safe.
+func seedAdmin(ctx context.Context, userRepo *repository.UserRepository, cfg *config.Config) error {
+	if cfg.SeedAdminUsername == "" || cfg.SeedAdminPassword == "" {
+		return nil // seeding disabled
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(cfg.SeedAdminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	created, err := userRepo.EnsureUser(ctx, cfg.SeedAdminUsername, string(hash), model.RoleAdmin)
+	if err != nil {
+		return err
+	}
+	if created {
+		log.Printf("seeded admin account %q", cfg.SeedAdminUsername)
+	}
+	return nil
+}
 
 func main() {
 	cfg := config.Load()
@@ -56,6 +81,11 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	problemRepo := repository.NewProblemRepository(pool)
 	submissionRepo := repository.NewSubmissionRepository(pool)
+
+	// Seed a fixed admin account on startup (idempotent).
+	if err := seedAdmin(context.Background(), userRepo, cfg); err != nil {
+		log.Fatalf("seed admin: %v", err)
+	}
 
 	// Judge engine
 	dockerRunner, err := judge.NewDockerRunner(cfg.DockerImage, cfg.JudgeMemoryLimit, cfg.JudgeCPULimit)
