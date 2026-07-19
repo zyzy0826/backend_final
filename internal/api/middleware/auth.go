@@ -38,10 +38,12 @@ func LoadPublicKey(cfg *config.Config) (*ecdsa.PublicKey, error) {
 }
 
 // Auth requires a valid JWT in the Authorization: Bearer <token> header.
-func Auth(publicKey *ecdsa.PublicKey) gin.HandlerFunc {
+// A token whose jti has been revoked (via logout) is rejected even if its
+// signature and expiry are still valid.
+func Auth(publicKey *ecdsa.PublicKey, denylist *TokenDenylist) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, err := parseToken(c, publicKey)
-		if err != nil || !token.Valid {
+		if err != nil || !token.Valid || isRevoked(token, denylist) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -51,13 +53,25 @@ func Auth(publicKey *ecdsa.PublicKey) gin.HandlerFunc {
 }
 
 // OptionalAuth parses the JWT if present, but does not abort if missing or invalid.
-func OptionalAuth(publicKey *ecdsa.PublicKey) gin.HandlerFunc {
+func OptionalAuth(publicKey *ecdsa.PublicKey, denylist *TokenDenylist) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if token, err := parseToken(c, publicKey); err == nil && token.Valid {
+		if token, err := parseToken(c, publicKey); err == nil && token.Valid && !isRevoked(token, denylist) {
 			setClaims(c, token)
 		}
 		c.Next()
 	}
+}
+
+// isRevoked reports whether the token's jti is on the denylist.
+func isRevoked(token *jwt.Token, denylist *TokenDenylist) bool {
+	if denylist == nil {
+		return false
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok {
+		return false
+	}
+	return denylist.IsRevoked(claims.ID)
 }
 
 func parseToken(c *gin.Context, publicKey *ecdsa.PublicKey) (*jwt.Token, error) {
@@ -87,4 +101,8 @@ func setClaims(c *gin.Context, token *jwt.Token) {
 	c.Set("user_id", claims.UserID)
 	c.Set("username", claims.Username)
 	c.Set("role", claims.Role)
+	c.Set("jti", claims.ID)
+	if claims.ExpiresAt != nil {
+		c.Set("token_exp", claims.ExpiresAt.Time)
+	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"regs/internal/api/middleware"
 	"regs/internal/model"
@@ -16,10 +17,11 @@ import (
 type UserHandler struct {
 	userRepo   *repository.UserRepository
 	privateKey *ecdsa.PrivateKey
+	denylist   *middleware.TokenDenylist
 }
 
-func NewUserHandler(userRepo *repository.UserRepository, privateKey *ecdsa.PrivateKey) *UserHandler {
-	return &UserHandler{userRepo: userRepo, privateKey: privateKey}
+func NewUserHandler(userRepo *repository.UserRepository, privateKey *ecdsa.PrivateKey, denylist *middleware.TokenDenylist) *UserHandler {
+	return &UserHandler{userRepo: userRepo, privateKey: privateKey, denylist: denylist}
 }
 
 type credentials struct {
@@ -77,8 +79,17 @@ func (h *UserHandler) Login(c *gin.Context) {
 }
 
 func (h *UserHandler) Logout(c *gin.Context) {
-	// JWT is stateless; there is no server-side session to invalidate.
-	// The client should simply discard its token.
+	// JWTs are stateless, so we revoke this token's id server-side until it would
+	// have expired. Subsequent requests carrying it are rejected by Auth.
+	jti := c.GetString("jti")
+	exp := c.GetTime("token_exp")
+	if exp.IsZero() {
+		// Fallback: a token without an expiry claim; keep it revoked for the
+		// maximum token lifetime so it cannot outlive a normal one.
+		exp = time.Now().Add(24 * time.Hour)
+	}
+	h.denylist.Revoke(jti, exp)
+
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 
@@ -99,6 +110,7 @@ func (h *UserHandler) signToken(user *model.User) (string, error) {
 		Username: user.Username,
 		Role:     user.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(), // jti — enables per-token revocation on logout
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		},

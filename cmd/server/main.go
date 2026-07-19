@@ -77,6 +77,9 @@ func main() {
 		log.Fatalf("public key: %v", err)
 	}
 
+	// In-memory denylist for JWTs revoked via logout.
+	denylist := middleware.NewTokenDenylist()
+
 	// Repositories
 	userRepo := repository.NewUserRepository(pool)
 	problemRepo := repository.NewProblemRepository(pool)
@@ -98,13 +101,13 @@ func main() {
 	q := queue.New(cfg.MaxConcurrentJobs, jdg)
 
 	// Handlers
-	userHandler := handler.NewUserHandler(userRepo, privateKey)
+	userHandler := handler.NewUserHandler(userRepo, privateKey, denylist)
 	problemHandler := handler.NewProblemHandler(problemRepo, cfg)
 	submissionHandler := handler.NewSubmissionHandler(submissionRepo, problemRepo, q, cfg)
 	statsHandler := handler.NewStatsHandler(submissionRepo)
 
 	// HTTP server
-	router := api.SetupRouter(publicKey, userHandler, problemHandler, submissionHandler, statsHandler)
+	router := api.SetupRouter(publicKey, denylist, userHandler, problemHandler, submissionHandler, statsHandler)
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,

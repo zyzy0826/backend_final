@@ -14,6 +14,7 @@ import (
 
 func SetupRouter(
 	publicKey *ecdsa.PublicKey,
+	denylist *middleware.TokenDenylist,
 	userHandler *handler.UserHandler,
 	problemHandler *handler.ProblemHandler,
 	submissionHandler *handler.SubmissionHandler,
@@ -21,7 +22,7 @@ func SetupRouter(
 ) *gin.Engine {
 	r := gin.Default()
 
-	auth := middleware.Auth(publicKey)
+	auth := middleware.Auth(publicKey, denylist)
 	requireUser := middleware.RequireRole(model.RoleUser)
 	requireAdmin := middleware.RequireRole(model.RoleAdmin)
 
