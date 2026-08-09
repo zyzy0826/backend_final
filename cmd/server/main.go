@@ -67,6 +67,11 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Bring the schema up to date on every startup (idempotent).
+	if err := db.Migrate(context.Background(), pool); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+
 	// JWT keys
 	privateKey, err := middleware.LoadPrivateKey(cfg)
 	if err != nil {
