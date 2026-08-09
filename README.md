@@ -76,21 +76,24 @@ backend_final/
 │       │
 │       └── router.go            # Gin 路由設定，掛載 middleware
 │
-├── storage/                     # 執行期產生（已加入 .gitignore）
-│   ├── uploads/                 # 上傳的 .zip 檔案（以 operatorId 命名）
-│   ├── workspace/               # 解壓後的工作目錄（掛載至 Docker）
-│   ├── problems/                # test-based 題目包 ZIP（以題目 id 命名）
-│   └── logs/                    # 每筆提交的三段實體日誌（configure/compile/output.log）
-│
-├── keys/                        # EC 金鑰（已加入 .gitignore）
-│   ├── private.pem
-│   └── public.pem
+├── scripts/
+│   └── gen-keys.sh              # 於容器內以 OpenSSL 生成 EC 金鑰對
 │
 ├── Dockerfile
 ├── docker-compose.yml
 ├── Makefile
 └── .env.example
 ```
+
+執行期資料一律存放於 Docker 具名資料卷，主機上不留任何目錄：
+
+| 資料卷 | 掛載點 | 內容 |
+|--------|--------|------|
+| `regs-storage` | `/app/storage` | `uploads/`（上傳的 ZIP）、`workspace/`（解壓後工作目錄）、`problems/`（題目包 ZIP）、`logs/`（三段實體日誌） |
+| `keys` | `/app/keys` | EC P-256 金鑰對（`keygen` 服務於首次啟動時生成） |
+| `postgres_data` | `/var/lib/postgresql/data` | 資料庫 |
+
+檢視資料卷內容：`docker compose exec app sh`，或 `make export-storage` 匯出至 `./storage-export`。
 
 ---
 
@@ -247,18 +250,30 @@ exit code 0 → PASS、非 0 → WA、125+ → RE、逾時 → TLE。
 
 ### 關於 Docker-out-of-Docker（DooD）
 
-app 容器透過掛載 `/var/run/docker.sock` 操控宿主機的 Docker daemon。  
-volume mount 路徑必須是**宿主機上的路徑**，因此需設定 `HOST_STORAGE_PATH`：
+app 容器透過掛載 `/var/run/docker.sock` 操控宿主機的 Docker daemon，判題容器是它的**兄弟容器**而非子容器。
+
+由此衍生一個問題：判題容器要看到 app 容器寫入的檔案。傳統做法是 bind mount，但 daemon 解析的是**宿主機路徑**，因此得額外告知 app 宿主機路徑為何（舊版的 `HOST_STORAGE_PATH`），在 Windows 上還得寫成 `/run/desktop/mnt/host/d/...` 這種形式，極易出錯。
+
+本專案改以**共用具名資料卷**解決：
 
 ```
-# .env 範例（當 app 跑在 Docker 內時）
-HOST_STORAGE_PATH=/home/user/backend_final/storage
-
-# Windows + Docker Desktop 需使用 WSL 形式的宿主機路徑（不能用 D:\... 形式）
-HOST_STORAGE_PATH=/run/desktop/mnt/host/d/myData/projects/backend_final/storage
+app 容器  ──┐
+            ├── regs-storage（具名資料卷）
+判題容器  ──┘
 ```
 
-本機直接執行（`go run`）時，`HOST_STORAGE_PATH` 與 `STORAGE_PATH` 相同，不需特別設定。
+app 將 `regs-storage` 掛載於 `/app/storage`；判題容器則以**卷名**掛載同一個卷。daemon 依名稱解析，全程不涉及任何宿主機路徑，Windows / macOS / Linux 行為完全一致。
+
+判題容器的掛載方式依 daemon 版本而定（`internal/judge/judge.go` 的 `workspaceMount`）：
+
+| Docker Engine | 掛載參數 | 容器內可見範圍 |
+|---------------|---------|--------------|
+| 25.0+ | `--mount type=volume,source=regs-storage,target=/workspace,volume-subpath=workspace/<operatorId>` | 僅該次提交自己的工作目錄 |
+| < 25.0 | `-v regs-storage:/storage`（工作目錄為 `/storage/workspace/<operatorId>`） | 整個資料卷 |
+
+`volume-subpath` 是較嚴格的做法：學生的程式只看得到自己的目錄，看不到其他人的提交。版本偵測於啟動時執行一次。
+
+> 若不使用 Docker 而直接於主機執行伺服器（`go run`），將 `STORAGE_VOLUME` 留空即可回退為 bind mount 模式，此時才需要設定 `HOST_STORAGE_PATH`。
 
 ---
 
@@ -266,55 +281,54 @@ HOST_STORAGE_PATH=/run/desktop/mnt/host/d/myData/projects/backend_final/storage
 
 ### 前置需求
 
-- Go 1.22+
-- Docker & Docker Compose
-- OpenSSL（用於生成 JWT 金鑰）
-- PostgreSQL 客戶端（可選，`make migrate` 用）
+**只需要 Docker Desktop（或 Docker Engine + Compose v2）。**
 
-### 步驟
+本機**不需要**安裝 Go、OpenSSL 或 PostgreSQL 客戶端——編譯、金鑰生成、建表與判題全部在容器內完成。
+
+### 啟動
 
 ```bash
-# 1. 安裝 Go 依賴 + 生成 EC 金鑰 + 建立 storage 目錄
-make setup
+docker compose up -d --build     # 或 make up
+```
 
-# 2. 複製並編輯環境設定
+這一道指令會完成：
+
+1. 於 `golang:1.25-alpine` 內編譯伺服器
+2. `keygen` 一次性容器以 OpenSSL 生成 EC P-256 金鑰對至 `keys` 資料卷（已存在則保留）
+3. 啟動 Postgres 並等待 healthcheck 通過
+4. app 啟動時自動套用內嵌的 `schema.sql`（冪等，每次啟動皆執行）
+5. app 啟動時自動確認並拉取判題映像檔 `yhlib/cs3060701`
+6. 建立管理員帳號（預設 `admin` / `admin1234`）
+
+完成後 API 位於 <http://localhost:8080>（可用 `.env` 的 `APP_PORT` 改變對外埠號）。
+
+> **首次啟動較慢**：需編譯映像檔並拉取判題映像檔（約 GB 級）。可用 `make logs` 觀察進度。
+
+### 常用指令
+
+| 指令 | 用途 |
+|------|------|
+| `make up` | 建置並啟動全部服務 |
+| `make logs` | 追蹤伺服器日誌 |
+| `make rebuild` | 改完程式碼後重新編譯並重啟 app |
+| `make shell` | 進入 app 容器（storage 位於 `/app/storage`） |
+| `make psql` | 連進資料庫 |
+| `make test` / `make vet` | 於暫時性 `golang` 容器內執行測試（不需本機 Go） |
+| `make export-storage` | 將 storage 資料卷匯出至 `./storage-export` |
+| `make down` | 停止服務，保留資料 |
+| `make clean` | 停止並清除所有資料卷 |
+
+> Windows 未安裝 `make` 時，直接執行 Makefile 內對應的 `docker compose ...` 指令即可。
+
+### 設定
+
+所有設定皆有可用預設值，`.env` 為選用。需要調整時複製 `.env.example` 即可：
+
+```bash
 cp .env.example .env
-# 修改 DATABASE_URL 等設定
-
-# 3. 啟動資料庫
-docker compose up db -d
-
-# 4. 建立資料表
-make migrate
-
-# 5. 啟動伺服器
-make run
-# → Listening on :8080
 ```
 
-### 使用 Docker Compose 完整部署
-
-```bash
-# 設定宿主機 storage 路徑（必須為絕對路徑）
-export HOST_STORAGE_PATH=$(pwd)/storage
-
-make docker-up   # 等同於 docker compose up -d --build
-make docker-down # 停止並移除 volumes
-```
-
-### 生成 JWT 金鑰
-
-```bash
-make gen-keys
-# 產生 keys/private.pem 與 keys/public.pem
-```
-
-或手動執行：
-
-```bash
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out keys/private.pem
-openssl pkey -in keys/private.pem -pubout -out keys/public.pem
-```
+較常用的是 `APP_PORT`（API 對外埠號）與 `DB_PORT`（Postgres 對外埠號），用於避開本機已被佔用的埠。
 
 ---
 
@@ -373,7 +387,11 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 - [x] `Queue.run` — buffered channel 作為 semaphore 控制最大併發數
 
 ### 基礎設施
-- [x] Dockerfile（builder `golang:1.25`、runtime 內含 `docker-cli` 供 DooD）/ docker-compose（app + db、healthcheck、DooD、db port 開放）/ Makefile / `.env.example` / `.gitignore`
+- [x] Dockerfile（builder `golang:1.25`、runtime 內含 `docker-cli` 供 DooD、`openssl` 供金鑰生成）
+- [x] docker-compose — `keygen` 一次性金鑰生成、app + db（healthcheck）、`tools` profile 提供容器化 Go 工具鏈
+- [x] 全容器化：不需本機 Go / OpenSSL / psql，`docker compose up -d --build` 即可完整啟動
+- [x] 啟動時自動套用 schema（內嵌 `schema.sql`，冪等）與自動拉取判題映像檔
+- [x] Makefile（全部指令走 Docker）/ `.env.example` / `.gitignore` / `.dockerignore`
 
 ### 文件（評分項）
 - [x] OpenAPI 3.0 規格 — [`docs/openapi.yaml`](docs/openapi.yaml)
@@ -391,10 +409,11 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 - [x] 上傳 ZIP 大小限制（`MAX_UPLOAD_MB`）
 - [x] 容器 Memory / CPU / PID 資源限制
 
+- [x] JWT 真正登出 — logout 將 token 的 `jti` 加入撤銷清單（`internal/api/middleware/denylist.go`），到期自動清除
+
 尚未實作（選做）：
 
 - [ ] Queue 狀態 API — 查詢佇列深度與 running 數量
-- [ ] JWT 真正登出（token 黑名單，需 Redis 或 DB）
 
 ---
 
@@ -405,5 +424,6 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 - **TLE 計時包含容器啟動時間**：時限是對整個 `docker run` 計時。在容器啟動較慢的環境
   （如部分 Windows Docker Desktop 主機，實測啟動一個容器可達 10 秒以上），
   題目 `time_limit` 需相應放寬，否則會誤判 TLE。
-- **既有資料庫的 schema 變更需手動套用**：`schema.sql` 只在 db volume 首次建立時由
-  initdb 自動執行；已存在的 volume 需執行 `make migrate`（或對 db 容器重跑 schema.sql）。
+- **判題容器仍需宿主機 Docker daemon**：app 透過掛載 `/var/run/docker.sock` 產生兄弟容器（DooD）。
+  這是刻意的取捨——相較於 Docker-in-Docker，它不需要 privileged 權限，且判題映像檔沿用宿主機快取。
+  代價是 app 容器對宿主機 daemon 具有完整控制權。
