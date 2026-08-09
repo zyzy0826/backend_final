@@ -1,0 +1,14 @@
+# Keep the build context small: only the Go module and scripts are needed.
+.git/
+.claude/
+.env
+keys/
+storage/
+storage-export/
+bin/
+regs/
+pkg-f001/
+*.zip
+docs/
+test-framework/
+test-programs/

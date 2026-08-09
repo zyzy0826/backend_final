@@ -1,28 +1,52 @@
+# Everything runs in containers: no Go toolchain, OpenSSL or psql is needed on
+# the host. `docker compose up -d --build` is the whole setup.
 services:
+  # One-shot init: writes the JWT EC key pair into the shared `keys` volume the
+  # first time the stack comes up. Reuses the app image (which ships openssl),
+  # so this costs no extra image pull.
+  keygen:
+    build: .
+    image: regs-app
+    entrypoint: ["sh", "/app/scripts/gen-keys.sh"]
+    environment:
+      KEY_DIR: /app/keys
+    volumes:
+      - keys:/app/keys
+    restart: "no"
+
   app:
     build: .
+    image: regs-app
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
     environment:
       PORT: "8080"
       DATABASE_URL: postgres://regs:password@db:5432/regs
       PRIVATE_KEY_PATH: /app/keys/private.pem
       PUBLIC_KEY_PATH: /app/keys/public.pem
-      DOCKER_IMAGE: yhlib/cs3060701
-      MAX_CONCURRENT_JOBS: "3"
-      TIME_LIMIT_SECONDS: "10"
+      DOCKER_IMAGE: ${DOCKER_IMAGE:-yhlib/cs3060701}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-3}
+      TIME_LIMIT_SECONDS: ${TIME_LIMIT_SECONDS:-10}
+      JUDGE_MEMORY_LIMIT: ${JUDGE_MEMORY_LIMIT:-512m}
+      JUDGE_CPU_LIMIT: ${JUDGE_CPU_LIMIT:-1.0}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-64}
+      SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:-admin}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin1234}
       STORAGE_PATH: /app/storage
-      # HOST_STORAGE_PATH must be the absolute path on your HOST machine.
-      # Example: HOST_STORAGE_PATH=/home/user/backend_final/storage
-      HOST_STORAGE_PATH: ${HOST_STORAGE_PATH}
+      # Judge containers mount this named volume by name, so the app never has
+      # to know any host path (this is what replaces HOST_STORAGE_PATH).
+      STORAGE_VOLUME: regs-storage
     volumes:
-      - ./storage:/app/storage
-      - ./keys:/app/keys
-      # Docker-out-of-Docker: share host's Docker socket so the app can spawn judge containers.
+      - storage:/app/storage
+      - keys:/app/keys:ro
+      # Docker-out-of-Docker: share the host's Docker socket so the app can
+      # spawn judge containers as siblings.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
         condition: service_healthy
+      keygen:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   db:
@@ -32,11 +56,11 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: regs
     ports:
-      # Expose to host so a locally-run server (`go run`) / psql can reach the DB.
-      - "5432:5432"
+      # Convenience only — the app reaches the DB over the compose network and
+      # applies the schema itself on startup. Change DB_PORT if 5432 is taken.
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./internal/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U regs"]
       interval: 5s
@@ -44,5 +68,23 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Go toolchain on demand, so `make test` / `make vet` need no host Go install.
+  # Behind a profile, so it never starts as part of `docker compose up`.
+  tools:
+    image: golang:1.25-alpine
+    working_dir: /src
+    entrypoint: ["go"]
+    command: ["version"]
+    volumes:
+      - .:/src
+      - gomod_cache:/go/pkg/mod
+    profiles: ["tools"]
+
 volumes:
   postgres_data:
+  keys:
+  gomod_cache:
+  storage:
+    # Fixed name: judge containers mount this volume by name, so it must not
+    # carry the compose project prefix.
+    name: regs-storage
