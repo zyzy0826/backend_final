@@ -27,3 +27,8 @@ vendor/
 # (problem packages, student submission zips, downloaded source/testcases)
 /*.zip
 /pkg-f001/
+/regs/
+# `curl -OJ .../problems/{id}/testcases` writes the response to this name
+/testcases
+# `make export-storage` dumps the storage volume here
+/storage-export/
