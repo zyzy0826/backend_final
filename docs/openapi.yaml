@@ -10,11 +10,25 @@ info:
     - `Guest`：無需 `Authorization` header
     - `User` / `Admin`：需帶 `Authorization: Bearer <JWT>`（ES256 簽章）
     - 標注為 Guest 的端點所有人皆可存取；標注 User 的 Admin 也可；標注 Admin 僅管理者。
-  version: 1.1.1
+
+    ## 啟動與取得 token
+    整套系統以容器執行，`docker compose up -d --build` 即可啟動（不需本機 Go /
+    OpenSSL / psql）。伺服器啟動時會自動建立一組管理員帳號，預設為
+    `admin` / `admin1234`（可於 `.env` 的 `SEED_ADMIN_USERNAME` /
+    `SEED_ADMIN_PASSWORD` 覆寫）。
+
+    以 `POST /api/users/login` 取得 JWT 後，於後續請求帶上
+    `Authorization: Bearer <token>`。Token 有效期 24 小時。
+  version: 1.2.0
 
 servers:
-  - url: http://localhost:8080
-    description: 本機開發伺服器
+  - url: http://127.0.0.1:8080
+    description: |
+      本機容器部署。容器內固定監聽 8080，對外發布的埠號由 `.env` 的 `APP_PORT`
+      決定，可用 `docker compose port app 8080` 查詢實際埠號。
+
+      請使用 `127.0.0.1` 而非 `localhost`：後者在 Windows 會優先解析為 IPv6 的
+      `::1`，而該位址可能被其他行程佔用，導致連線建立後隨即中斷。
 
 tags:
   - name: UserInfo
@@ -27,7 +41,12 @@ paths:
     post:
       tags: [UserInfo]
       summary: 註冊新使用者帳號
-      description: 密碼以 bcrypt 雜湊後儲存。新帳號預設 role 為 `user`。
+      description: |
+        密碼以 bcrypt 雜湊後儲存。新帳號預設 role 為 `user`；欲取得 Admin 權限
+        請改用啟動時自動建立的管理員帳號（見上方說明），或直接於資料庫調整 role。
+
+        使用者名稱為 UNIQUE，重複註冊回 409。注意管理員帳號（預設 `admin`）已由
+        系統建立，以該名稱註冊必然得到 409。
       security: []
       requestBody:
         required: true
@@ -88,10 +107,15 @@ paths:
     post:
       tags: [UserInfo]
       summary: 登出目前登入的使用者
-      description: JWT 為無狀態設計，伺服器不維護 session；客戶端自行丟棄 token 即可。
+      description: |
+        伺服器會將此 token 的 `jti` 加入撤銷清單，使其**立即失效**——再以同一個
+        token 呼叫任何需授權的端點都會得到 401，而非僅由客戶端自行丟棄。
+
+        JWT 本身無狀態，故撤銷清單記錄於伺服器端（記憶體），項目於該 token 原
+        到期時間後自動清除。此清單不跨行程共用，伺服器重啟後亦會清空。
       responses:
         '200':
-          description: 已登出
+          description: 已登出，該 token 自此失效
           content:
             application/json:
               schema:
@@ -524,7 +548,8 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     Unauthorized:
-      description: 未提供或無效的 JWT
+      description: |
+        未提供 JWT，或 JWT 無效——涵蓋簽章不符、已過期，以及**已登出而遭撤銷**的 token。
       content:
         application/json:
           schema:
