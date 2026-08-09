@@ -7,6 +7,9 @@ bin/
 
 # Keys (never commit private keys)
 keys/
+# ...including a stray pair generated outside keys/, e.g. by running the
+# reference openssl commands from the docs in the project root.
+*.pem
 
 # Storage (runtime data)
 storage/
