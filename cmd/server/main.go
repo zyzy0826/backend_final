@@ -100,6 +100,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
+	// Pull the judge image up front so the first submission is not the thing that
+	// discovers it is missing. Non-fatal: the rest of the API stays usable, and a
+	// judge run would still surface the failure as a normal result.
+	log.Printf("checking judge image %q (a first-time pull can take a while)...", cfg.DockerImage)
+	if pulled, err := dockerRunner.EnsureImage(context.Background()); err != nil {
+		log.Printf("WARNING: judge image %q unavailable, judging will fail: %v", cfg.DockerImage, err)
+	} else if pulled {
+		log.Printf("pulled judge image %q", cfg.DockerImage)
+	}
 	jdg := judge.New(dockerRunner, submissionRepo, problemRepo, cfg)
 
 	// Job queue (with concurrency semaphore)

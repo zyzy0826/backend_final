@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"regs/internal/config"
@@ -41,6 +42,15 @@ const (
 	configureTimeout = 120 // seconds for `cmake -G`
 	compileTimeout   = 300 // seconds for `cmake --build`
 	listTimeout      = 30  // seconds for `ctest --show-only`
+)
+
+const (
+	// workspaceMountPoint is where a single submission's workspace appears
+	// inside a judge container.
+	workspaceMountPoint = "/workspace"
+	// storageMountPoint is where the whole storage volume appears when the
+	// daemon is too old to mount just one directory out of it.
+	storageMountPoint = "/storage"
 )
 
 // RunJob executes the full judge pipeline for a single submission.
@@ -94,20 +104,18 @@ func (j *Judge) RunJob(ctx context.Context, job JobInput) {
 		}
 	}
 
-	// The Docker daemon mounts a path on the HOST machine, which differs from the
-	// app's local path when running inside a container (DooD).
-	hostWorkspace := j.hostPath(workspace)
+	mnt := j.workspaceMount(workspace)
 
 	if problem.PackagePath != "" {
-		j.runTestBased(ctx, job, problem, workspace, hostWorkspace, srcDir, timeLimit)
+		j.runTestBased(ctx, job, problem, workspace, mnt, srcDir, timeLimit)
 		return
 	}
-	j.runIOMode(ctx, job, workspace, hostWorkspace, srcDir, timeLimit)
+	j.runIOMode(ctx, job, workspace, mnt, srcDir, timeLimit)
 }
 
 // --- Test-based mode -------------------------------------------------------
 
-func (j *Judge) runTestBased(ctx context.Context, job JobInput, problem *model.Problem, workspace, hostWorkspace, srcDir string, timeLimit int) {
+func (j *Judge) runTestBased(ctx context.Context, job JobInput, problem *model.Problem, workspace string, mnt Mount, srcDir string, timeLimit int) {
 	problemDir := filepath.Join(workspace, "problem")
 	if err := extractZip(problem.PackagePath, problemDir); err != nil {
 		j.done(ctx, job, model.StatusSE, "failed to extract problem package: "+err.Error(), "", "")
@@ -119,13 +127,14 @@ func (j *Judge) runTestBased(ctx context.Context, job JobInput, problem *model.P
 		return
 	}
 
-	problemC := containerPath(workspace, problemRoot)
-	srcC := containerPath(workspace, findSourceRoot(srcDir))
+	problemC := containerPath(workspace, mnt.Dir, problemRoot)
+	srcC := containerPath(workspace, mnt.Dir, findSourceRoot(srcDir))
+	buildC := mnt.Dir + "/build"
 
 	// --- Phase 1: configure against the problem's CMake project, pointing
 	// SOURCE_ROOT at the student's uploaded sources. ---
-	r1, err := j.runner.Run(ctx, hostWorkspace,
-		[]string{"cmake", "-G", "Ninja", "-S", problemC, "-B", "/workspace/build", "-D", "SOURCE_ROOT=" + srcC},
+	r1, err := j.runner.Run(ctx, mnt,
+		[]string{"cmake", "-G", "Ninja", "-S", problemC, "-B", buildC, "-D", "SOURCE_ROOT=" + srcC},
 		"bridge", configureTimeout, false)
 	configureLog := logFrom(r1)
 	if err != nil {
@@ -137,8 +146,8 @@ func (j *Judge) runTestBased(ctx context.Context, job JobInput, problem *model.P
 	}
 
 	// --- Phase 2: build all case targets. ---
-	r2, err := j.runner.Run(ctx, hostWorkspace,
-		[]string{"cmake", "--build", "/workspace/build", "--verbose"}, "bridge", compileTimeout, false)
+	r2, err := j.runner.Run(ctx, mnt,
+		[]string{"cmake", "--build", buildC, "--verbose"}, "bridge", compileTimeout, false)
 	compileLog := logFrom(r2)
 	if err != nil {
 		compileLog += "\n[runner error] " + err.Error()
@@ -150,7 +159,7 @@ func (j *Judge) runTestBased(ctx context.Context, job JobInput, problem *model.P
 
 	// --- Phase 3: discover the registered ctest cases, then run every case in
 	// its own fully network-isolated container. ---
-	cases, listLog, err := j.listCases(ctx, hostWorkspace)
+	cases, listLog, err := j.listCases(ctx, mnt, buildC)
 	if err != nil {
 		j.done(ctx, job, model.StatusSE, configureLog, compileLog, "failed to list test cases:\n"+listLog+"\n"+err.Error())
 		return
@@ -166,7 +175,7 @@ func (j *Judge) runTestBased(ctx context.Context, job JobInput, problem *model.P
 	for _, tc := range cases {
 		outputLog.WriteString(fmt.Sprintf("=== %s ===\n", tc.Name))
 
-		r, err := j.runner.Run(ctx, hostWorkspace, tc.Command, "none", timeLimit, true)
+		r, err := j.runner.Run(ctx, mnt, tc.Command, "none", timeLimit, true)
 		outputLog.WriteString(logFrom(r))
 
 		caseStatus := model.StatusAC
@@ -209,9 +218,9 @@ type ctestCase struct {
 }
 
 // listCases asks ctest for the registered tests (json-v1) without running them.
-func (j *Judge) listCases(ctx context.Context, hostWorkspace string) ([]ctestCase, string, error) {
-	r, err := j.runner.Run(ctx, hostWorkspace,
-		[]string{"ctest", "--test-dir", "/workspace/build", "--show-only=json-v1"},
+func (j *Judge) listCases(ctx context.Context, mnt Mount, buildDir string) ([]ctestCase, string, error) {
+	r, err := j.runner.Run(ctx, mnt,
+		[]string{"ctest", "--test-dir", buildDir, "--show-only=json-v1"},
 		"none", listTimeout, false)
 	if err != nil {
 		return nil, logFrom(r), err
@@ -244,12 +253,14 @@ func (j *Judge) listCases(ctx context.Context, hostWorkspace string) ([]ctestCas
 
 // runScript locates the first freshly-built executable under build/ and runs it
 // with stdin redirected from the current testcase input.
-const runScript = `exe=$(find /workspace/build -maxdepth 4 -type f -perm -u+x ` +
-	`-not -path '*/CMakeFiles/*' -not -name '*.sh' -not -name '*.cmake' -not -name '*.so' | head -n1); ` +
-	`if [ -z "$exe" ]; then echo "no executable found in build/" >&2; exit 127; fi; ` +
-	`"$exe" < /workspace/input.txt`
+func runScript(workspaceDir string) string {
+	return `exe=$(find ` + workspaceDir + `/build -maxdepth 4 -type f -perm -u+x ` +
+		`-not -path '*/CMakeFiles/*' -not -name '*.sh' -not -name '*.cmake' -not -name '*.so' | head -n1); ` +
+		`if [ -z "$exe" ]; then echo "no executable found in build/" >&2; exit 127; fi; ` +
+		`"$exe" < ` + workspaceDir + `/input.txt`
+}
 
-func (j *Judge) runIOMode(ctx context.Context, job JobInput, workspace, hostWorkspace, srcDir string, timeLimit int) {
+func (j *Judge) runIOMode(ctx context.Context, job JobInput, workspace string, mnt Mount, srcDir string, timeLimit int) {
 	// I/O mode judges the student's own CMake project, which must ship a
 	// CMakeLists.txt (either at the archive root or in a single top folder).
 	projectRoot, err := findCMakeRoot(srcDir)
@@ -257,11 +268,12 @@ func (j *Judge) runIOMode(ctx context.Context, job JobInput, workspace, hostWork
 		j.done(ctx, job, model.StatusSE, "CMakeLists.txt not found in project root", "", "")
 		return
 	}
-	projectC := containerPath(workspace, projectRoot)
+	projectC := containerPath(workspace, mnt.Dir, projectRoot)
+	buildC := mnt.Dir + "/build"
 
 	// --- Phase 1: configure (cmake -G Ninja) ---
-	r1, err := j.runner.Run(ctx, hostWorkspace,
-		[]string{"cmake", "-G", "Ninja", "-S", projectC, "-B", "/workspace/build"},
+	r1, err := j.runner.Run(ctx, mnt,
+		[]string{"cmake", "-G", "Ninja", "-S", projectC, "-B", buildC},
 		"bridge", configureTimeout, false)
 	configureLog := logFrom(r1)
 	if err != nil {
@@ -273,8 +285,8 @@ func (j *Judge) runIOMode(ctx context.Context, job JobInput, workspace, hostWork
 	}
 
 	// --- Phase 2: build (cmake --build --verbose) ---
-	r2, err := j.runner.Run(ctx, hostWorkspace,
-		[]string{"cmake", "--build", "/workspace/build", "--verbose"}, "bridge", compileTimeout, false)
+	r2, err := j.runner.Run(ctx, mnt,
+		[]string{"cmake", "--build", buildC, "--verbose"}, "bridge", compileTimeout, false)
 	compileLog := logFrom(r2)
 	if err != nil {
 		compileLog += "\n[runner error] " + err.Error()
@@ -308,8 +320,8 @@ func (j *Judge) runIOMode(ctx context.Context, job JobInput, workspace, hostWork
 			break
 		}
 
-		r, err := j.runner.Run(ctx, hostWorkspace,
-			[]string{"sh", "-c", runScript}, "none", timeLimit, true)
+		r, err := j.runner.Run(ctx, mnt,
+			[]string{"sh", "-c", runScript(mnt.Dir)}, "none", timeLimit, true)
 
 		caseStatus := model.StatusAC
 		switch {
@@ -400,24 +412,57 @@ func (j *Judge) writeLogFiles(operatorID, configureLog, compileLog, outputLog st
 	}
 }
 
-// hostPath maps a path under the app's local StoragePath onto the equivalent path on
-// the Docker host (HostStoragePath). When running locally the two are identical.
-func (j *Judge) hostPath(localPath string) string {
-	rel, err := filepath.Rel(j.cfg.StoragePath, localPath)
+// workspaceMount decides how a submission's workspace is handed to its judge
+// containers. There are two ways to get the app and the judge containers to
+// look at the same files:
+//
+// Volume mode (StorageVolume set — the containerised deployment): the judge
+// container mounts the very same named volume that backs the app's StoragePath.
+// The daemon resolves the volume by name, so no host path is involved and the
+// stack behaves identically on Windows, macOS and Linux. On Docker Engine 25+
+// only the submission's own directory is mounted (volume-subpath); on older
+// daemons the whole volume has to be mounted instead.
+//
+// Bind mode (StorageVolume empty — server running directly on the host): the
+// workspace directory is bind-mounted, which requires its path as the Docker
+// daemon sees it, i.e. HostStoragePath.
+func (j *Judge) workspaceMount(workspace string) Mount {
+	rel, err := filepath.Rel(j.cfg.StoragePath, workspace)
 	if err != nil {
-		return localPath
+		rel = ""
 	}
-	return filepath.Join(j.cfg.HostStoragePath, rel)
+
+	if vol := j.cfg.StorageVolume; vol != "" {
+		if j.runner.SupportsVolumeSubpath() && rel != "" && rel != "." {
+			spec := fmt.Sprintf("type=volume,source=%s,target=%s,volume-subpath=%s",
+				vol, workspaceMountPoint, filepath.ToSlash(rel))
+			return Mount{Args: []string{"--mount", spec}, Dir: workspaceMountPoint}
+		}
+		dir := storageMountPoint
+		if rel != "" && rel != "." {
+			dir += "/" + filepath.ToSlash(rel)
+		}
+		return Mount{Args: []string{"-v", vol + ":" + storageMountPoint}, Dir: dir}
+	}
+
+	host := filepath.Join(j.cfg.HostStoragePath, rel)
+	if abs, err := filepath.Abs(host); err == nil {
+		host = abs
+	}
+	if runtime.GOOS == "windows" {
+		host = toDockerPath(host)
+	}
+	return Mount{Args: []string{"-v", host + ":" + workspaceMountPoint}, Dir: workspaceMountPoint}
 }
 
 // containerPath maps a local path inside the workspace to its path inside the
-// container (the workspace is mounted at /workspace).
-func containerPath(workspace, local string) string {
+// container, where the workspace is rooted at containerWorkspace.
+func containerPath(workspace, containerWorkspace, local string) string {
 	rel, err := filepath.Rel(workspace, local)
 	if err != nil || rel == "." {
-		return "/workspace"
+		return containerWorkspace
 	}
-	return "/workspace/" + filepath.ToSlash(rel)
+	return containerWorkspace + "/" + filepath.ToSlash(rel)
 }
 
 func logFrom(r *RunResult) string {

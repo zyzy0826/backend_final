@@ -10,12 +10,17 @@ import (
 )
 
 type Config struct {
-	Port              string
-	DatabaseURL       string
-	PrivateKeyPath    string
-	PublicKeyPath     string
-	DockerImage       string
-	StoragePath       string
+	Port           string
+	DatabaseURL    string
+	PrivateKeyPath string
+	PublicKeyPath  string
+	DockerImage    string
+	StoragePath    string
+	// StorageVolume is the name of the Docker volume that backs StoragePath.
+	// When set (the containerised deployment), judge containers mount that very
+	// volume by name, so no host path is ever involved. Empty falls back to
+	// bind-mounting HostStoragePath, for running the server directly on the host.
+	StorageVolume     string
 	HostStoragePath   string
 	MaxConcurrentJobs int
 	TimeLimitSeconds  int
@@ -42,6 +47,7 @@ func Load() *Config {
 		PublicKeyPath:     getEnv("PUBLIC_KEY_PATH", "./keys/public.pem"),
 		DockerImage:       getEnv("DOCKER_IMAGE", "yhlib/cs3060701"),
 		StoragePath:       storagePath,
+		StorageVolume:     getEnv("STORAGE_VOLUME", ""),
 		HostStoragePath:   getEnv("HOST_STORAGE_PATH", storagePath),
 		MaxConcurrentJobs: maxJobs,
 		TimeLimitSeconds:  timeLimit,

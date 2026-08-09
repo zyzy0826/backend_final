@@ -7,8 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os/exec"
-	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,32 +19,41 @@ type RunResult struct {
 	TimedOut bool
 }
 
+// Mount describes how a submission's workspace is handed to a judge container:
+// the `docker run` flags that expose it, and the path it lands on inside the
+// container.
+type Mount struct {
+	Args []string // e.g. ["-v", "regs-storage:/storage"]
+	Dir  string   // e.g. "/workspace" or "/storage/workspace/<operatorId>"
+}
+
 type DockerRunner struct {
 	image  string
 	memory string // applied to limited (execute-phase) containers, e.g. "512m"
 	cpus   string // e.g. "1.0"
+
+	// volumeSubpath records whether the daemon can mount a single directory out
+	// of a named volume; see supportsVolumeSubpath.
+	volumeSubpath bool
 }
 
 func NewDockerRunner(image, memory, cpus string) (*DockerRunner, error) {
-	return &DockerRunner{image: image, memory: memory, cpus: cpus}, nil
+	return &DockerRunner{
+		image:         image,
+		memory:        memory,
+		cpus:          cpus,
+		volumeSubpath: supportsVolumeSubpath(),
+	}, nil
 }
 
+// SupportsVolumeSubpath reports whether judge containers can be given just their
+// own directory out of the shared storage volume.
+func (d *DockerRunner) SupportsVolumeSubpath() bool { return d.volumeSubpath }
+
 // Run starts a new Docker container, executes cmd, and returns its output.
-// hostWorkspacePath must be the absolute path on the HOST machine; it is mounted
-// at /workspace inside the container.
 // networkMode: "bridge" for the configure/build phases, "none" for the execute phase.
 // limited applies memory/CPU/pids caps — enable it for untrusted student binaries.
-func (d *DockerRunner) Run(ctx context.Context, hostWorkspacePath string, cmd []string, networkMode string, timeoutSec int, limited bool) (*RunResult, error) {
-	absPath, err := filepath.Abs(hostWorkspacePath)
-	if err != nil {
-		return nil, err
-	}
-
-	mountSrc := absPath
-	if runtime.GOOS == "windows" {
-		mountSrc = toDockerPath(absPath)
-	}
-
+func (d *DockerRunner) Run(ctx context.Context, mnt Mount, cmd []string, networkMode string, timeoutSec int, limited bool) (*RunResult, error) {
 	// A known container name lets us kill the container on timeout: killing the
 	// docker CLI client alone would leave the container running in the background.
 	name := "regs-judge-" + randomSuffix()
@@ -54,9 +62,9 @@ func (d *DockerRunner) Run(ctx context.Context, hostWorkspacePath string, cmd []
 		"run", "--rm",
 		"--name", name,
 		"--network", networkMode,
-		"-v", mountSrc + ":/workspace",
-		"-w", "/workspace",
 	}
+	args = append(args, mnt.Args...)
+	args = append(args, "-w", mnt.Dir)
 	if limited {
 		if d.memory != "" {
 			args = append(args, "--memory", d.memory)
@@ -104,6 +112,70 @@ func (d *DockerRunner) Run(ctx context.Context, hostWorkspacePath string, cmd []
 		Stderr:   stderr.String(),
 		TimedOut: timedOut,
 	}, nil
+}
+
+// EnsureImage makes sure the judge image is available to the Docker daemon,
+// pulling it if it is not. Doing this once at startup means the first
+// submission does not silently fail (or stall) on a missing image, and keeps
+// the deployment self-contained: nothing has to be pulled by hand beforehand.
+func (d *DockerRunner) EnsureImage(ctx context.Context) (pulled bool, err error) {
+	if err := exec.CommandContext(ctx, "docker", "image", "inspect", d.image).Run(); err == nil {
+		return false, nil
+	}
+	out, err := exec.CommandContext(ctx, "docker", "pull", d.image).CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("docker pull %s: %w: %s", d.image, err, strings.TrimSpace(string(out)))
+	}
+	return true, nil
+}
+
+// volumeSubpathMinMajor is the first Docker major version that supports
+// `--mount ...,volume-subpath=`.
+const volumeSubpathMinMajor = 25
+
+// supportsVolumeSubpath reports whether `--mount ...,volume-subpath=` can be
+// used. Both ends have to be new enough: the CLI parses the flag (an older
+// client rejects it outright, whatever the daemon supports) and the daemon
+// implements it.
+//
+// It matters because the app and the judge containers share one named storage
+// volume. Without subpath support a judge container has to mount the whole
+// volume, which would expose every other submission's sources to the student
+// binary being executed; with it, each container sees only its own workspace.
+func supportsVolumeSubpath() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "docker", "version",
+		"--format", "{{.Client.Version}} {{.Server.Version}}").Output()
+	if err != nil {
+		return false
+	}
+
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return false
+	}
+	for _, v := range fields {
+		if majorVersion(v) < volumeSubpathMinMajor {
+			return false
+		}
+	}
+	return true
+}
+
+// majorVersion parses the leading major number of a version string such as
+// "28.3.3", returning 0 if it cannot be read.
+func majorVersion(v string) int {
+	major, _, ok := strings.Cut(strings.TrimSpace(v), ".")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func randomSuffix() string {
